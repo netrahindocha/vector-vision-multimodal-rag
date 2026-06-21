@@ -46,3 +46,8 @@ websockets==16.0
 langchain-core
 langchain-openai
 langchain-chroma
+chromadb
+
+sqlalchemy
+psycopg[binary]
+alembic

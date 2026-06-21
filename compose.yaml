@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rag_app
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma-data:/chroma/chroma
+
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: rag-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - chroma
+      - postgres
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag_user:rag_password@postgres:5432/rag_app
+      PYTHONUNBUFFERED: "1"
+      DO_NOT_TRACK: "true"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      CHROMA_COLLECTION_NAME: rag_documents
+      UPLOAD_DIR: /workspace/uploads
+    volumes:
+      - upload-data:/workspace/uploads
+      - unstructured-cache:/home/notebook-user/.cache
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    image: rag-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
+  chroma-data:
+  upload-data:
+  unstructured-cache:
