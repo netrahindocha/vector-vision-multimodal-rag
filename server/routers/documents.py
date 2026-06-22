@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Document, Workspace
 from schemas import DocumentRead
+from tasks.ingestion_tasks import process_document_ingestion_task
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -65,11 +66,27 @@ def upload_document(
         content_type=file.content_type,
         size_bytes=size_bytes,
         storage_path=str(storage_path),
+        status="queued",
+        stage="uploaded",
     )
 
     db.add(document)
     db.commit()
     db.refresh(document)
+
+    process_document_ingestion_task.delay(str(document.id))
+    return document
+
+
+@router.get("/{document_id}", response_model=DocumentRead)
+def get_document(
+    document_id: uuid.UUID,
+    workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    document = db.get(Document, document_id)
+    if document is None or document.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Document not found")
     return document
 
 
