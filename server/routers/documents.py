@@ -38,12 +38,11 @@ def upload_document(
     stored_filename = f"{document_id}_{safe_filename}"
 
     workspace_upload_dir = UPLOAD_DIR / str(workspace_id)
-    workspace_upload_dir.mkdir(parents=True, exist_ok=True)
-
     storage_path = workspace_upload_dir / stored_filename
 
     size_bytes = 0
     try:
+        workspace_upload_dir.mkdir(parents=True, exist_ok=True)
         with storage_path.open("wb") as buffer:
             while chunk := file.file.read(1024 * 1024):
                 size_bytes += len(chunk)
@@ -51,7 +50,10 @@ def upload_document(
     except Exception as exc:
         if storage_path.exists():
             storage_path.unlink()
-        raise HTTPException(status_code=500, detail="Failed to save uploaded file") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save uploaded file: {exc}",
+        ) from exc
     finally:
         file.file.close()
 

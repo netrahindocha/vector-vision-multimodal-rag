@@ -5,7 +5,7 @@ FROM ${UNSTRUCTURED_IMAGE}
 
 USER root
 
-RUN mkdir -p /workspace \
+RUN mkdir -p /workspace /workspace/uploads \
     && chown -R notebook-user:notebook-user /workspace
 
 WORKDIR /workspace
