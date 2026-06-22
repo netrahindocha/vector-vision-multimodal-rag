@@ -4,8 +4,10 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from database import Base, engine
+from db_migrations import ensure_document_status_columns
 from routers.documents import router as documents_router
 from routers.workspaces import router as workspaces_router
+from services.ingestion import start_pending_document_recovery
 
 # Import models so SQLAlchemy registers tables before create_all().
 import models  # noqa: F401
@@ -14,6 +16,8 @@ import models  # noqa: F401
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_document_status_columns()
+    start_pending_document_recovery()
     yield
 
 
