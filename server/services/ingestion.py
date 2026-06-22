@@ -123,6 +123,15 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
 
             update_document_status(document_id, "processing", "summarizing")
             documents = summarize_chunks(chunks)
+            for index, chunk_document in enumerate(documents):
+                chunk_document.metadata.update(
+                    {
+                        "workspace_id": str(document.workspace_id),
+                        "document_id": str(document.id),
+                        "original_filename": document.original_filename,
+                        "chunk_index": index,
+                    }
+                )
 
             update_document_status(document_id, "processing", "embedding")
             create_vector_store(documents)

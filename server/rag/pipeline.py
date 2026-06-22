@@ -180,7 +180,11 @@ def summarize_chunks(chunks):
                         "tables_html": content_data["tables"],
                         "images_base64": content_data["images"],
                     }
-                )
+                ),
+                "content_types": json.dumps(content_data["types"]),
+                "table_count": len(content_data["tables"]),
+                "image_count": len(content_data["images"]),
+                "text_length": len(content_data["text"] or ""),
             },
         )
 

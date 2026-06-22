@@ -6,6 +6,7 @@ from sqlalchemy import text
 from database import Base, engine
 from db_migrations import ensure_document_status_columns
 from routers.documents import router as documents_router
+from routers.retrieval import router as retrieval_router
 from routers.workspaces import router as workspaces_router
 from services.ingestion import start_pending_document_recovery
 
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(workspaces_router)
 app.include_router(documents_router)
+app.include_router(retrieval_router)
 
 
 @app.get("/")
