@@ -20,6 +20,13 @@ services:
     volumes:
       - chroma-data:/chroma/chroma
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
   backend:
     build:
       context: ./server
@@ -30,15 +37,45 @@ services:
     depends_on:
       - chroma
       - postgres
+      - redis
+    env_file:
+      ./server/.env
     environment:
       DATABASE_URL: postgresql+psycopg://rag_user:rag_password@postgres:5432/rag_app
       PYTHONUNBUFFERED: "1"
       DO_NOT_TRACK: "true"
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       CHROMA_COLLECTION_NAME: rag_documents
       UPLOAD_DIR: /workspace/uploads
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      - upload-data:/workspace/uploads
+      - unstructured-cache:/home/notebook-user/.cache
+
+  celery_worker:
+    image: rag-backend
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    command: celery -A celery_app.celery_app worker --loglevel=info --concurrency=1
+    depends_on:
+      - chroma
+      - postgres
+      - redis
+    env_file:
+      ./server/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag_user:rag_password@postgres:5432/rag_app
+      PYTHONUNBUFFERED: "1"
+      DO_NOT_TRACK: "true"
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      CHROMA_COLLECTION_NAME: rag_documents
+      UPLOAD_DIR: /workspace/uploads
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     volumes:
       - upload-data:/workspace/uploads
       - unstructured-cache:/home/notebook-user/.cache
@@ -58,3 +95,4 @@ volumes:
   chroma-data:
   upload-data:
   unstructured-cache:
+  redis-data:

@@ -47,6 +47,8 @@ langchain-core
 langchain-openai
 langchain-chroma
 chromadb
+celery
+redis
 
 sqlalchemy
 psycopg[binary]
