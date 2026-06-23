@@ -1,3 +1,4 @@
+import json
 import threading
 import traceback
 import uuid
@@ -6,7 +7,7 @@ from collections import Counter
 from sqlalchemy import text
 
 from database import SessionLocal
-from models import Document, DocumentPartitionItem
+from models import Document, DocumentChunk, DocumentPartitionItem
 from rag.pipeline import (
     create_chunks_by_title,
     create_vector_store,
@@ -172,6 +173,52 @@ def build_chunking_metadata(chunks) -> dict:
     }
 
 
+def parse_json_metadata(value, default):
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return default
+
+
+def store_document_chunks(document: Document, chunk_documents) -> None:
+    with SessionLocal() as db:
+        db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document.id
+        ).delete(synchronize_session=False)
+
+        for index, chunk_document in enumerate(chunk_documents):
+            metadata = dict(chunk_document.metadata or {})
+            original_content = parse_json_metadata(metadata.get("original_content"), {})
+            content_types = parse_json_metadata(metadata.get("content_types"), [])
+
+            db.add(
+                DocumentChunk(
+                    document_id=document.id,
+                    workspace_id=document.workspace_id,
+                    chunk_index=index,
+                    raw_text=original_content.get("raw_text") or "",
+                    tables_html=original_content.get("tables_html") or [],
+                    images_base64=original_content.get("images_base64") or [],
+                    content_types=content_types if isinstance(content_types, list) else [],
+                    table_count=int(metadata.get("table_count") or 0),
+                    image_count=int(metadata.get("image_count") or 0),
+                    text_length=int(metadata.get("text_length") or 0),
+                    enhanced_content=chunk_document.page_content,
+                    chunk_metadata={
+                        key: value for key, value in metadata.items() if key != "original_content"
+                    },
+                )
+            )
+
+        db.commit()
+
+
 def claim_queued_document(document_id: uuid.UUID | str) -> Document | None:
     with SessionLocal() as db:
         result = db.execute(
@@ -239,6 +286,7 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
 
             update_document_status(document_id, "processing", "summarizing")
             documents = summarize_chunks(chunks)
+            store_document_chunks(document, documents)
             for index, chunk_document in enumerate(documents):
                 chunk_document.metadata.update(
                     {

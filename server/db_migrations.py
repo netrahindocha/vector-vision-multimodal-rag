@@ -38,6 +38,27 @@ def ensure_document_status_columns() -> None:
         "CREATE INDEX IF NOT EXISTS ix_document_partition_items_category ON document_partition_items (category)",
     ]
 
+    chunk_statements = [
+        "CREATE TABLE IF NOT EXISTS document_chunks ("
+        "id UUID PRIMARY KEY, "
+        "document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE, "
+        "workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, "
+        "chunk_index INTEGER NOT NULL, "
+        "raw_text TEXT, "
+        "tables_html JSONB, "
+        "images_base64 JSONB, "
+        "content_types JSONB, "
+        "table_count INTEGER NOT NULL DEFAULT 0, "
+        "image_count INTEGER NOT NULL DEFAULT 0, "
+        "text_length INTEGER NOT NULL DEFAULT 0, "
+        "enhanced_content TEXT, "
+        "chunk_metadata JSONB, "
+        "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()"
+        ")",
+        "CREATE INDEX IF NOT EXISTS ix_document_chunks_document_id ON document_chunks (document_id)",
+        "CREATE INDEX IF NOT EXISTS ix_document_chunks_workspace_id ON document_chunks (workspace_id)",
+    ]
+
     with engine.begin() as connection:
-        for statement in [*statements, *partition_item_statements]:
+        for statement in [*statements, *partition_item_statements, *chunk_statements]:
             connection.execute(text(statement))
