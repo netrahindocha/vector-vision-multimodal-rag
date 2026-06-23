@@ -1,4 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
   ArrowRight,
@@ -6,6 +8,7 @@ import {
   ChevronRight,
   CloudUpload,
   FileText,
+  MessageCircle,
   Sparkles,
   Upload,
 } from "lucide-react";
@@ -747,6 +750,7 @@ function UploadDetailsPanel({
   const [isLoadingPartitionItems, setIsLoadingPartitionItems] = useState(false);
   const [partitionItemsError, setPartitionItemsError] = useState<string | null>(null);
   const [chunkView, setChunkView] = useState<"summary" | "all">("summary");
+  const [summaryView, setSummaryView] = useState<"summary" | "all">("summary");
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
   const [chunksError, setChunksError] = useState<string | null>(null);
@@ -761,6 +765,7 @@ function UploadDetailsPanel({
     setPartitionView("summary");
     setSelectedCategory(null);
     setChunkView("summary");
+    setSummaryView("summary");
   }, [activeSection, documentId]);
 
   useEffect(() => {
@@ -809,7 +814,7 @@ function UploadDetailsPanel({
   }, [activeSection, documentId, partitionView, selectedCategory, workspaceId]);
 
   useEffect(() => {
-    if (activeSection !== "chunking" || !documentId) {
+    if (!["chunking", "summarizing"].includes(activeSection) || !documentId) {
       return;
     }
 
@@ -925,12 +930,168 @@ function UploadDetailsPanel({
             smartChunkCount={latestItemWithMetadata?.processingMetadata?.chunking?.chunks_created ?? chunks.length}
             view={chunkView}
           />
+        ) : activeSection === "summarizing" ? (
+          <SummarizationDetailsPanel
+            chunks={chunks}
+            error={chunksError}
+            isLoading={isLoadingChunks}
+            onOpenAll={() => setSummaryView("all")}
+            onBack={() => setSummaryView("summary")}
+            smartChunkCount={latestItemWithMetadata?.processingMetadata?.chunking?.chunks_created ?? chunks.length}
+            view={summaryView}
+          />
         ) : (
           <EmptyDetailsState message="We will design this detail section next." />
         )}
       </div>
     </div>
   );
+}
+
+function SummarizationDetailsPanel({
+  chunks,
+  error,
+  isLoading,
+  onBack,
+  onOpenAll,
+  smartChunkCount,
+  view,
+}: {
+  chunks: DocumentChunk[];
+  error: string | null;
+  isLoading: boolean;
+  onBack: () => void;
+  onOpenAll: () => void;
+  smartChunkCount: number;
+  view: "summary" | "all";
+}) {
+  const multimodalChunks = chunks.filter(isMultimodalSummaryChunk);
+  const multimodalCount = multimodalChunks.length;
+
+  if (view === "all") {
+    return (
+      <div>
+        <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
+          <button
+            className="rounded-full border border-blue-300/25 bg-blue-400/10 px-3 py-1 text-blue-100 transition hover:border-blue-200/45 hover:text-white"
+            onClick={onBack}
+            type="button"
+          >
+            Summarization
+          </button>
+          <ChevronRight className="h-4 w-4 text-blue-200/50" />
+          <span className="rounded-full border border-purple-300/25 bg-purple-400/10 px-3 py-1 text-purple-100">
+            Enhanced summaries
+          </span>
+        </div>
+
+        {isLoading ? (
+          <EmptyDetailsState message="Loading enhanced summaries..." />
+        ) : error ? (
+          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+        ) : multimodalChunks.length === 0 ? (
+          <EmptyDetailsState message="No multimodal summaries found for this document yet." />
+        ) : (
+          <div className="max-h-[34rem] space-y-4 overflow-y-auto pr-2">
+            {multimodalChunks.map((chunk, index) => (
+              <SummaryContentCard chunk={chunk} index={index} key={`${chunk.chunk_index}-${index}`} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-5">
+        <p className="text-lg font-semibold text-white">Summarization details</p>
+        <p className="mt-1 text-sm text-slate-400">Review AI-enhanced summaries generated from smart chunks.</p>
+      </div>
+      {error ? (
+        <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+      ) : null}
+      <button
+        className="group w-full rounded-2xl border border-purple-300/20 bg-gradient-to-r from-blue-500/[0.08] via-purple-500/[0.08] to-blue-950/30 p-5 text-left transition hover:-translate-y-0.5 hover:border-purple-200/35 hover:shadow-[0_0_50px_rgba(168,85,247,0.18)]"
+        disabled={isLoading || multimodalCount === 0}
+        onClick={onOpenAll}
+        type="button"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="text-lg font-semibold text-purple-50 drop-shadow-[0_0_14px_rgba(168,85,247,0.35)]">
+            {smartChunkCount} Chunks Processed
+            <span className="mx-3 text-blue-200/70">→</span>
+            {multimodalCount} Multimodal Summaries
+          </p>
+          <Badge className="border-purple-300/30 bg-purple-300/10 text-purple-100" variant="outline">
+            Open summaries
+          </Badge>
+        </div>
+        <p className="mt-2 text-sm text-slate-400">Click to view each enhanced summary in clean vertical cards.</p>
+      </button>
+    </div>
+  );
+}
+
+function SummaryContentCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
+  const summaryStatus = getChunkSummaryStatus(chunk);
+  const isAiGenerated = summaryStatus === "ai_generated";
+  const hasFailed = summaryStatus === "fallback";
+
+  if (!isMultimodalSummaryChunk(chunk)) {
+    return null;
+  }
+
+  return (
+    <div className={`rounded-2xl border bg-white/[0.035] p-4 transition hover:shadow-[0_0_45px_rgba(168,85,247,0.18)] ${
+      hasFailed
+        ? "border-red-300/20 hover:border-red-300/35"
+        : "border-purple-300/15 hover:border-purple-300/30"
+    }`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-medium text-purple-100">
+          {index + 1}. Enhanced Summary for Chunk {chunk.chunk_index}
+        </p>
+        <Badge className={hasFailed ? "border-red-300/30 bg-red-500/10 text-red-100" : "border-purple-300/30 bg-purple-300/10 text-purple-100"} variant="outline">
+          {hasFailed ? "Failed" : "AI Generated"}
+        </Badge>
+      </div>
+      {isAiGenerated ? (
+        <div className="rounded-xl border border-purple-300/10 bg-black/20 p-4 text-sm leading-6 text-slate-300">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              h1: ({ children }) => <h1 className="mb-3 mt-4 text-xl font-semibold text-white first:mt-0">{children}</h1>,
+              h2: ({ children }) => <h2 className="mb-3 mt-4 text-lg font-semibold text-white first:mt-0">{children}</h2>,
+              h3: ({ children }) => <h3 className="mb-2 mt-4 text-base font-semibold text-purple-100 first:mt-0">{children}</h3>,
+              p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+              ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+              ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+              li: ({ children }) => <li className="pl-1">{children}</li>,
+              strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+            }}
+          >
+            {chunk.enhanced_content || "No generated summary available."}
+          </ReactMarkdown>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-red-300/15 bg-red-500/10 p-4">
+          <p className="text-sm font-semibold text-red-100">Failed summary</p>
+          <p className="mt-1 text-sm leading-6 text-red-100/75">
+            The AI summary could not be generated for this multimodal chunk.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isMultimodalSummaryChunk(chunk: DocumentChunk) {
+  return chunk.metadata.is_multimodal === true;
+}
+
+function getChunkSummaryStatus(chunk: DocumentChunk) {
+  return typeof chunk.metadata.summary_status === "string" ? chunk.metadata.summary_status : "unknown";
 }
 
 function ChunksDetailsPanel({
@@ -1468,8 +1629,15 @@ function DocumentCard({
           </CardDescription>
         </div>
       </CardHeader>
-      <CardFooter className="relative z-40 text-sm text-slate-400">
-        Uploaded {formatDate(document.created_at)}
+      <CardFooter className="relative z-40 flex items-center justify-between gap-3 text-sm text-slate-400">
+        <span>Uploaded {formatDate(document.created_at)}</span>
+        <button
+          className="inline-flex items-center gap-2 rounded-full border border-cyan-200/20 bg-cyan-100/10 px-3.5 py-2 text-sm font-medium text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200/40 hover:bg-cyan-100/15 hover:shadow-[0_0_26px_rgba(34,211,238,0.18)]"
+          type="button"
+        >
+          <MessageCircle className="h-4 w-4" />
+          Chat
+        </button>
       </CardFooter>
     </Card>
   );

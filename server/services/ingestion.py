@@ -12,7 +12,7 @@ from rag.pipeline import (
     create_chunks_by_title,
     create_vector_store,
     partition_document,
-    summarize_chunks,
+    summarize_one_chunk,
 )
 
 MAX_CONCURRENT_INGESTIONS = 1
@@ -285,9 +285,10 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
             )
 
             update_document_status(document_id, "processing", "summarizing")
-            documents = summarize_chunks(chunks)
-            store_document_chunks(document, documents)
-            for index, chunk_document in enumerate(documents):
+            documents = []
+            total_chunks = len(chunks)
+            for index, chunk in enumerate(chunks):
+                chunk_document = summarize_one_chunk(chunk, index, total_chunks)
                 chunk_document.metadata.update(
                     {
                         "workspace_id": str(document.workspace_id),
@@ -296,6 +297,9 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
                         "chunk_index": index,
                     }
                 )
+                documents.append(chunk_document)
+
+            store_document_chunks(document, documents)
 
             update_document_status(document_id, "processing", "embedding")
             create_vector_store(documents)
