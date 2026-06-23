@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -34,10 +34,16 @@ import { Field, FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  buildDocumentEventsUrl,
   createWorkspace,
+  getDocumentChunks,
   listDocuments,
   listWorkspaces,
+  uploadDocument,
   type Document,
+  type DocumentChunk,
+  type DocumentStatusEvent,
+  type ProcessingMetadata,
   type Workspace,
 } from "@/lib/api";
 
@@ -442,6 +448,28 @@ function DocumentsPage({
   );
 }
 
+const INGESTION_STEPS = [
+  { stage: "uploaded", label: "Uploaded" },
+  { stage: "starting", label: "Starting" },
+  { stage: "partitioning", label: "Partitioning" },
+  { stage: "chunking", label: "Chunking" },
+  { stage: "summarizing", label: "Summarizing" },
+  { stage: "embedding", label: "Embedding" },
+  { stage: "completed", label: "Completed" },
+];
+
+type UploadProgressItem = {
+  localId: string;
+  fileName: string;
+  documentId?: string;
+  status: string;
+  stage: string;
+  errorMessage?: string | null;
+  updatedAt?: string | null;
+  processingMetadata?: ProcessingMetadata | null;
+  events: DocumentStatusEvent[];
+};
+
 function UploadFilePage({
   onBack,
   onBackToWorkspaces,
@@ -451,30 +479,135 @@ function UploadFilePage({
   onBackToWorkspaces: () => void;
   workspace: Workspace;
 }) {
+  const [progressItems, setProgressItems] = useState<UploadProgressItem[]>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [activeProgressView, setActiveProgressView] = useState<"progress" | "details">("progress");
+  const [activeDetailSection, setActiveDetailSection] = useState("partitioning");
+  const eventSourcesRef = useRef<EventSource[]>([]);
+
+  useEffect(() => {
+    return () => {
+      eventSourcesRef.current.forEach((eventSource) => eventSource.close());
+      eventSourcesRef.current = [];
+    };
+  }, []);
+
+  async function handleFiles(files: FileList | File[]) {
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) return;
+
+    await Promise.all(
+      selectedFiles.map(async (file) => {
+        const localId = `${file.name}-${file.lastModified}-${crypto.randomUUID()}`;
+        setProgressItems((current) => [
+          ...current,
+          { localId, fileName: file.name, status: "uploading", stage: "uploading", events: [] },
+        ]);
+
+        try {
+          const document = await uploadDocument(workspace.id, file);
+          const initialEvent: DocumentStatusEvent = {
+            id: document.id,
+            status: document.status,
+            stage: document.stage,
+            error_message: document.error_message,
+            updated_at: document.updated_at,
+            processing_metadata: document.processing_metadata,
+          };
+
+          setProgressItems((current) =>
+            current.map((item) =>
+              item.localId === localId
+                ? {
+                    ...item,
+                    documentId: document.id,
+                    status: document.status,
+                    stage: document.stage,
+                    errorMessage: document.error_message,
+                    updatedAt: document.updated_at,
+                    processingMetadata: document.processing_metadata,
+                    events: [initialEvent],
+                  }
+                : item,
+            ),
+          );
+
+          subscribeToDocumentEvents(localId, document.id);
+        } catch (err) {
+          setProgressItems((current) =>
+            current.map((item) =>
+              item.localId === localId
+                ? {
+                    ...item,
+                    status: "failed",
+                    stage: "failed",
+                    errorMessage: err instanceof Error ? err.message : "Upload failed",
+                  }
+                : item,
+            ),
+          );
+        }
+      }),
+    );
+  }
+
+  function subscribeToDocumentEvents(localId: string, documentId: string) {
+    const eventSource = new EventSource(buildDocumentEventsUrl(workspace.id, documentId));
+    eventSourcesRef.current.push(eventSource);
+
+    eventSource.addEventListener("document_status", (event) => {
+      const payload = JSON.parse(event.data) as DocumentStatusEvent;
+
+      setProgressItems((current) =>
+        current.map((item) => {
+          if (item.localId !== localId) return item;
+
+          const lastEvent = item.events[item.events.length - 1];
+          const isDuplicate =
+            lastEvent?.status === payload.status &&
+            lastEvent?.stage === payload.stage &&
+            lastEvent?.updated_at === payload.updated_at;
+
+          return {
+            ...item,
+            status: payload.status,
+            stage: payload.stage,
+            errorMessage: payload.error_message,
+            updatedAt: payload.updated_at,
+            processingMetadata: payload.processing_metadata,
+            events: isDuplicate ? item.events : [...item.events, payload],
+          };
+        }),
+      );
+
+      if (payload.status === "completed" || payload.status === "failed") {
+        eventSource.close();
+      }
+    });
+
+    eventSource.onerror = () => eventSource.close();
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setIsDragActive(false);
+    handleFiles(event.dataTransfer.files);
+  }
+
   return (
     <>
       <header className="mb-12 space-y-6">
         <nav className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-          <button
-            className="group inline-flex items-center gap-2 rounded-full border border-blue-300/10 bg-white/[0.03] px-3 py-1.5 text-blue-100 transition hover:border-blue-300/30 hover:bg-blue-400/10 hover:text-white"
-            onClick={onBackToWorkspaces}
-            type="button"
-          >
+          <button className="group inline-flex items-center gap-2 rounded-full border border-blue-300/10 bg-white/[0.03] px-3 py-1.5 text-blue-100 transition hover:border-blue-300/30 hover:bg-blue-400/10 hover:text-white" onClick={onBackToWorkspaces} type="button">
             <ArrowLeft className="h-3.5 w-3.5 transition group-hover:-translate-x-0.5" />
             All Workspaces
           </button>
           <ChevronRight className="h-4 w-4 text-blue-200/50" />
-          <button
-            className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-cyan-100 shadow-[0_0_24px_rgba(34,211,238,0.12)] transition hover:border-cyan-200/40 hover:bg-cyan-300/15 hover:text-white"
-            onClick={onBack}
-            type="button"
-          >
+          <button className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-cyan-100 shadow-[0_0_24px_rgba(34,211,238,0.12)] transition hover:border-cyan-200/40 hover:bg-cyan-300/15 hover:text-white" onClick={onBack} type="button">
             {workspace.name}
           </button>
           <ChevronRight className="h-4 w-4 text-blue-200/50" />
-          <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-3 py-1.5 text-blue-100 shadow-[0_0_24px_rgba(59,130,246,0.15)]">
-            Upload File
-          </span>
+          <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-3 py-1.5 text-blue-100 shadow-[0_0_24px_rgba(59,130,246,0.15)]">Upload File</span>
         </nav>
 
         <div className="max-w-3xl space-y-5">
@@ -483,9 +616,7 @@ function UploadFilePage({
             Upload documents
           </Badge>
           <div className="space-y-4">
-            <h1 className="text-4xl font-semibold tracking-tight text-white md:text-6xl">
-              Upload File
-            </h1>
+            <h1 className="text-4xl font-semibold tracking-tight text-white md:text-6xl">Upload File</h1>
             <p className="max-w-2xl text-base leading-7 text-slate-300 md:text-lg">
               Add files to <span className="text-blue-100">{workspace.name}</span>. They will be queued for ingestion and become searchable once processing completes.
             </p>
@@ -499,27 +630,27 @@ function UploadFilePage({
           <div className="pointer-events-none absolute right-0 top-0 h-48 w-48 rounded-full bg-cyan-300/15 blur-3xl" />
           <CardHeader className="relative z-10">
             <CardTitle className="text-2xl text-white">Choose document(s)</CardTitle>
-            <CardDescription className="text-slate-300">
-              Drag and drop files here, or browse from your device.
-            </CardDescription>
+            <CardDescription className="text-slate-300">Drag and drop files here, or browse from your device.</CardDescription>
           </CardHeader>
           <div className="relative z-10 px-6 pb-6">
             <label
-              className="group flex min-h-[22rem] cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-blue-300/30 bg-blue-400/[0.04] p-8 text-center transition hover:border-blue-200/60 hover:bg-blue-400/[0.08] hover:shadow-[0_0_60px_rgba(59,130,246,0.2)]"
+              className={`group flex min-h-[22rem] cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed p-8 text-center transition hover:shadow-[0_0_60px_rgba(59,130,246,0.2)] ${isDragActive ? "border-blue-200/70 bg-blue-400/[0.1]" : "border-blue-300/30 bg-blue-400/[0.04] hover:border-blue-200/60 hover:bg-blue-400/[0.08]"}`}
               htmlFor="upload-files"
+              onDragEnter={(event) => { event.preventDefault(); setIsDragActive(true); }}
+              onDragLeave={(event) => { event.preventDefault(); setIsDragActive(false); }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleDrop}
             >
               <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-3xl border border-blue-200/20 bg-blue-400/10 text-blue-100 shadow-[0_0_55px_rgba(59,130,246,0.35)] transition group-hover:scale-105 group-hover:bg-blue-400/15">
                 <CloudUpload className="h-11 w-11" />
               </div>
               <p className="text-2xl font-semibold text-white">Drop your files here</p>
-              <p className="mt-3 max-w-md text-sm leading-6 text-slate-400">
-                PDF and document uploads will appear in the progress panel after upload starts.
-              </p>
+              <p className="mt-3 max-w-md text-sm leading-6 text-slate-400">PDF and document uploads will appear in the progress panel after upload starts.</p>
               <div className="mt-8 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-[0_0_35px_rgba(59,130,246,0.45)] transition group-hover:bg-blue-500">
                 <Upload className="mr-2 h-4 w-4" />
                 Upload file(s)
               </div>
-              <input id="upload-files" multiple type="file" className="sr-only" />
+              <input id="upload-files" multiple type="file" className="sr-only" onChange={(event) => { if (event.target.files) { handleFiles(event.target.files); event.target.value = ""; } }} />
             </label>
           </div>
         </Card>
@@ -527,26 +658,394 @@ function UploadFilePage({
         <Card className="relative overflow-hidden border-blue-300/15 bg-slate-950/70 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl">
           <div className="pointer-events-none absolute inset-x-12 top-0 h-28 rounded-full bg-blue-500/20 blur-3xl" />
           <CardHeader className="relative z-10">
-            <CardTitle className="text-2xl text-white">Progress</CardTitle>
-            <CardDescription className="text-slate-300">
-              Upload and ingestion progress will appear here.
-            </CardDescription>
-          </CardHeader>
-          <div className="relative z-10 flex min-h-[22rem] items-center justify-center px-6 pb-6">
-            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-400/10 text-blue-100">
-                <Sparkles className="h-6 w-6" />
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="text-2xl text-white">Progress</CardTitle>
+                <CardDescription className="mt-1 text-slate-300">Upload and ingestion progress will appear here.</CardDescription>
               </div>
-              <p className="font-medium text-white">Waiting for files</p>
-              <p className="mt-2 max-w-xs text-sm leading-6 text-slate-400">
-                This section is intentionally empty until you start uploading documents.
-              </p>
+              <div className="grid w-full grid-cols-2 rounded-full border border-blue-300/15 bg-white/[0.04] p-1 sm:w-56">
+                <button
+                  className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                    activeProgressView === "progress"
+                      ? "bg-blue-300/15 text-blue-50 shadow-[0_0_20px_rgba(59,130,246,0.18)]"
+                      : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+                  }`}
+                  onClick={() => setActiveProgressView("progress")}
+                  type="button"
+                >
+                  Progress
+                </button>
+                <button
+                  className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                    activeProgressView === "details"
+                      ? "bg-blue-300/15 text-blue-50 shadow-[0_0_20px_rgba(59,130,246,0.18)]"
+                      : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+                  }`}
+                  onClick={() => setActiveProgressView("details")}
+                  type="button"
+                >
+                  Details
+                </button>
+              </div>
             </div>
+          </CardHeader>
+          <div className="relative z-10 min-h-[22rem] px-6 pb-6">
+            {activeProgressView === "progress" ? (
+              progressItems.length === 0 ? (
+                <div className="flex min-h-[22rem] items-center justify-center">
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-400/10 text-blue-100">
+                      <Sparkles className="h-6 w-6" />
+                    </div>
+                    <p className="font-medium text-white">Waiting for files</p>
+                    <p className="mt-2 max-w-xs text-sm leading-6 text-slate-400">This section is intentionally empty until you start uploading documents.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {progressItems.map((item) => <UploadProgressCard item={item} key={item.localId} />)}
+                </div>
+              )
+            ) : (
+              <UploadDetailsPanel
+                activeSection={activeDetailSection}
+                items={progressItems}
+                onSectionChange={setActiveDetailSection}
+                workspaceId={workspace.id}
+              />
+            )}
           </div>
         </Card>
       </div>
     </>
   );
+}
+
+const DETAIL_SECTIONS = [
+  { id: "partitioning", label: "Partitions" },
+  { id: "chunking", label: "Chunks" },
+  { id: "summarizing", label: "Summarization" },
+  { id: "embedding", label: "Embeddings" },
+];
+
+function UploadDetailsPanel({
+  activeSection,
+  items,
+  onSectionChange,
+  workspaceId,
+}: {
+  activeSection: string;
+  items: UploadProgressItem[];
+  onSectionChange: (section: string) => void;
+  workspaceId: string;
+}) {
+  const [partitionView, setPartitionView] = useState<"summary" | "text" | "images" | "tables">("summary");
+  const [chunks, setChunks] = useState<DocumentChunk[]>([]);
+  const [isLoadingChunks, setIsLoadingChunks] = useState(false);
+  const [chunksError, setChunksError] = useState<string | null>(null);
+
+  const latestItemWithMetadata = [...items]
+    .reverse()
+    .find((item) => item.processingMetadata?.partitioning);
+  const partitioning = latestItemWithMetadata?.processingMetadata?.partitioning;
+  const documentId = latestItemWithMetadata?.documentId;
+
+  useEffect(() => {
+    setPartitionView("summary");
+  }, [activeSection, documentId]);
+
+  useEffect(() => {
+    if (activeSection !== "partitioning" || partitionView === "summary" || !documentId) {
+      return;
+    }
+
+    let ignore = false;
+
+    async function loadChunks() {
+      try {
+        setIsLoadingChunks(true);
+        setChunksError(null);
+        const response = await getDocumentChunks(workspaceId, documentId as string);
+        if (!ignore) {
+          setChunks(response.chunks);
+        }
+      } catch (err) {
+        if (!ignore) {
+          setChunksError(err instanceof Error ? err.message : "Failed to load partition content");
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingChunks(false);
+        }
+      }
+    }
+
+    loadChunks();
+
+    return () => {
+      ignore = true;
+    };
+  }, [activeSection, documentId, partitionView, workspaceId]);
+
+  return (
+    <div className="grid min-h-[22rem] gap-5 lg:grid-cols-[13rem_1fr]">
+      <div className="space-y-3">
+        {DETAIL_SECTIONS.map((section) => {
+          const isActive = activeSection === section.id;
+          return (
+            <button
+              className={`w-full rounded-2xl border px-4 py-3 text-left text-sm font-medium transition ${
+                isActive
+                  ? "border-blue-300/35 bg-blue-900/35 text-blue-50 shadow-[0_0_24px_rgba(30,64,175,0.22)]"
+                  : "border-blue-300/10 bg-blue-950/20 text-slate-300 hover:border-blue-300/25 hover:bg-blue-900/25 hover:text-blue-50"
+              }`}
+              key={section.id}
+              onClick={() => onSectionChange(section.id)}
+              type="button"
+            >
+              {section.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="rounded-3xl border border-white/10 bg-black/15 p-5">
+        {activeSection === "partitioning" ? (
+          partitioning ? (
+            partitionView === "summary" ? (
+              <>
+                <div className="mb-5">
+                  <p className="text-lg font-semibold text-white">Partition details</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Real partition statistics from {latestItemWithMetadata?.fileName}.
+                  </p>
+                </div>
+                <div className="mb-3">
+                  <DetailMetricCard label="Total Elements Found" value={partitioning.elements_found ?? 0} wide />
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <DetailMetricCard clickable label="Text" onClick={() => setPartitionView("text")} value={partitioning.text ?? 0} />
+                  <DetailMetricCard clickable label="Images" onClick={() => setPartitionView("images")} value={partitioning.images ?? 0} />
+                  <DetailMetricCard clickable label="Tables" onClick={() => setPartitionView("tables")} value={partitioning.tables ?? 0} />
+                </div>
+                {partitioning.categories ? (
+                  <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {Object.entries(partitioning.categories)
+                      .filter(([label]) => !["Table", "Image"].includes(label))
+                      .map(([label, value]) => (
+                        <DetailMetricCard key={label} label={label} value={value} subtle />
+                      ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <PartitionContentView
+                chunks={chunks}
+                error={chunksError}
+                isLoading={isLoadingChunks}
+                onBack={() => setPartitionView("summary")}
+                view={partitionView}
+              />
+            )
+          ) : (
+            <EmptyDetailsState message="Partition details will appear here after partitioning completes." />
+          )
+        ) : (
+          <EmptyDetailsState message="We will design this detail section next." />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PartitionContentView({
+  chunks,
+  error,
+  isLoading,
+  onBack,
+  view,
+}: {
+  chunks: DocumentChunk[];
+  error: string | null;
+  isLoading: boolean;
+  onBack: () => void;
+  view: "text" | "images" | "tables";
+}) {
+  const title = view === "text" ? "Texts" : view === "images" ? "Images" : "Tables";
+  const items = buildPartitionContentItems(chunks, view);
+
+  return (
+    <div>
+      <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
+        <button className="text-blue-100 transition hover:text-white" onClick={onBack} type="button">
+          Partitions
+        </button>
+        <ChevronRight className="h-4 w-4 text-blue-200/50" />
+        <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-3 py-1 text-blue-100">
+          {title}
+        </span>
+      </div>
+
+      {isLoading ? (
+        <EmptyDetailsState message={`Loading ${title.toLowerCase()}...`} />
+      ) : error ? (
+        <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+      ) : items.length === 0 ? (
+        <EmptyDetailsState message={`No ${title.toLowerCase()} found in the stored chunk content.`} />
+      ) : (
+        <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-2">
+          {items.map((item, index) => (
+            <PartitionContentCard item={item} index={index} key={`${item.type}-${item.chunkIndex}-${index}`} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type PartitionContentItem = {
+  type: "text" | "images" | "tables";
+  chunkIndex: number;
+  value: string;
+};
+
+function buildPartitionContentItems(chunks: DocumentChunk[], view: "text" | "images" | "tables") {
+  return chunks.flatMap((chunk) => {
+    if (view === "text") {
+      return chunk.raw_text ? [{ type: view, chunkIndex: chunk.chunk_index, value: chunk.raw_text }] : [];
+    }
+    if (view === "images") {
+      return chunk.images_base64.map((image) => ({ type: view, chunkIndex: chunk.chunk_index, value: image }));
+    }
+    return chunk.tables_html.map((table) => ({ type: view, chunkIndex: chunk.chunk_index, value: table }));
+  });
+}
+
+function PartitionContentCard({ item, index }: { item: PartitionContentItem; index: number }) {
+  return (
+    <div className="rounded-2xl border border-blue-300/15 bg-white/[0.035] p-4 transition hover:border-blue-300/30 hover:shadow-[0_0_45px_rgba(59,130,246,0.2)]">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-blue-100">
+          {index + 1}. Chunk {item.chunkIndex}
+        </p>
+        <Badge className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" variant="outline">
+          {item.type === "text" ? "Text" : item.type === "images" ? "Image" : "Table"}
+        </Badge>
+      </div>
+      {item.type === "text" ? (
+        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">{item.value}</p>
+      ) : item.type === "images" ? (
+        <img alt={`Extracted visual ${index + 1}`} className="max-h-96 w-full rounded-xl object-contain" src={`data:image/jpeg;base64,${item.value}`} />
+      ) : (
+        <div className="overflow-auto rounded-xl bg-white p-3 text-slate-950" dangerouslySetInnerHTML={{ __html: item.value }} />
+      )}
+    </div>
+  );
+}
+
+function DetailMetricCard({
+  clickable = false,
+  label,
+  onClick,
+  subtle = false,
+  value,
+  wide = false,
+}: {
+  clickable?: boolean;
+  label: string;
+  onClick?: () => void;
+  subtle?: boolean;
+  value: number;
+  wide?: boolean;
+}) {
+  const Component = clickable ? "button" : "div";
+  return (
+    <Component
+      className={`w-full rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-[0_0_45px_rgba(59,130,246,0.22)] ${
+        subtle
+          ? "border-blue-300/10 bg-white/[0.03]"
+          : "border-blue-300/20 bg-blue-400/[0.06]"
+      } ${wide ? "flex items-center justify-between gap-4" : ""} ${clickable ? "cursor-pointer hover:border-blue-300/35 hover:bg-blue-400/[0.09]" : ""}`}
+      onClick={onClick}
+      type={clickable ? "button" : undefined}
+    >
+      <p className={wide ? "text-base font-medium text-slate-300" : "text-sm text-slate-400"}>{label}</p>
+      <p className={wide ? "text-3xl font-semibold text-white" : "mt-2 text-2xl font-semibold text-white"}>{value}</p>
+    </Component>
+  );
+}
+
+function EmptyDetailsState({ message }: { message: string }) {
+  return (
+    <div className="flex min-h-[18rem] items-center justify-center">
+      <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 text-center">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-400/10 text-blue-100">
+          <FileText className="h-6 w-6" />
+        </div>
+        <p className="font-medium text-white">Details waiting</p>
+        <p className="mt-2 max-w-xs text-sm leading-6 text-slate-400">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function UploadProgressCard({ item }: { item: UploadProgressItem }) {
+  const activeIndex = getActiveStepIndex(item.stage, item.status);
+
+  return (
+    <div className="rounded-3xl border border-blue-300/15 bg-white/[0.035] p-5 shadow-[0_0_45px_rgba(59,130,246,0.12)]">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="line-clamp-1 text-lg font-semibold text-white">{item.fileName}</p>
+          <p className="mt-1 text-sm text-slate-400">{item.documentId ? `Document ${item.documentId}` : "Uploading file to workspace"}</p>
+        </div>
+        <Badge className={item.status === "failed" ? "border-red-300/30 bg-red-500/10 text-red-100" : "border-blue-300/30 bg-blue-400/10 text-blue-100"} variant="outline">{item.status}</Badge>
+      </div>
+
+      <div className="mb-7 flex items-center">
+        {INGESTION_STEPS.map((step, index) => {
+          const isActive = index <= activeIndex;
+          return (
+            <div className="flex flex-1 items-center last:flex-none" key={step.stage}>
+              <div className="flex flex-col items-center gap-2">
+                <div className={`h-4 w-4 rounded-full border transition ${isActive ? "border-blue-200 bg-blue-400 shadow-[0_0_22px_rgba(96,165,250,0.9)]" : "border-slate-600 bg-slate-900"}`} />
+                <span className={`whitespace-nowrap text-[11px] ${isActive ? "text-blue-100" : "text-slate-500"}`}>{step.label}</span>
+              </div>
+              {index < INGESTION_STEPS.length - 1 ? <div className={`mx-2 mb-6 h-[2px] flex-1 transition ${index < activeIndex ? "bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.85)]" : "bg-slate-700/80"}`} /> : null}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="space-y-2">
+        {item.events.length === 0 ? (
+          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-400">1. Uploading file...</div>
+        ) : (
+          item.events.map((event, index) => (
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3" key={`${event.stage}-${event.updated_at}-${index}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-white">{index + 1}. {formatStageLabel(event.stage)}</p>
+                <Badge className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" variant="outline">{event.status}</Badge>
+              </div>
+              <p className="mt-1 text-sm text-slate-400">Stage changed to <span className="text-blue-100">{event.stage}</span></p>
+              {event.error_message ? <p className="mt-2 text-sm text-red-200">{event.error_message}</p> : null}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getActiveStepIndex(stage: string, status: string) {
+  if (status === "failed") return Math.max(0, INGESTION_STEPS.findIndex((step) => step.stage === stage));
+  if (stage === "uploading") return -1;
+  const index = INGESTION_STEPS.findIndex((step) => step.stage === stage);
+  return index === -1 ? 0 : index;
+}
+
+function formatStageLabel(stage: string) {
+  return INGESTION_STEPS.find((step) => step.stage === stage)?.label ?? stage;
 }
 
 function CreateWorkspaceDialog({

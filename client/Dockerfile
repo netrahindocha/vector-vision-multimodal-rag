@@ -18,6 +18,7 @@ FROM nginx:1.27-alpine AS production
 RUN printf 'server {\n\
   listen 80;\n\
   server_name _;\n\
+  client_max_body_size 15m;\n\
   root /usr/share/nginx/html;\n\
   index index.html;\n\
 \n\
