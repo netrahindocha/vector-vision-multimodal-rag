@@ -6,7 +6,7 @@ from collections import Counter
 from sqlalchemy import text
 
 from database import SessionLocal
-from models import Document
+from models import Document, DocumentPartitionItem
 from rag.pipeline import (
     create_chunks_by_title,
     create_vector_store,
@@ -80,6 +80,71 @@ def update_document_processing_metadata(
         db.commit()
 
 
+def serialize_element_metadata(element) -> dict:
+    metadata = getattr(element, "metadata", None)
+    if metadata is None:
+        return {}
+
+    try:
+        data = metadata.to_dict()
+        if isinstance(data, dict):
+            data.pop("image_base64", None)
+            data.pop("orig_elements", None)
+            return data
+    except Exception:
+        pass
+
+    return {}
+
+
+def get_partition_content_type(element) -> str:
+    category = getattr(element, "category", None)
+    element_type = type(element).__name__
+    if category == "Table" or element_type == "Table":
+        return "table"
+    if category == "Image" or element_type == "Image":
+        return "image"
+    return "text"
+
+
+def store_document_partition_items(document: Document, elements) -> None:
+    with SessionLocal() as db:
+        db.query(DocumentPartitionItem).filter(
+            DocumentPartitionItem.document_id == document.id
+        ).delete(synchronize_session=False)
+
+        for index, element in enumerate(elements):
+            content_type = get_partition_content_type(element)
+            element_metadata = serialize_element_metadata(element)
+            text_content = getattr(element, "text", None)
+            table_html = None
+            image_base64 = None
+
+            if content_type == "table":
+                table_html = getattr(getattr(element, "metadata", None), "text_as_html", None)
+                text_content = text_content or None
+            elif content_type == "image":
+                image_base64 = getattr(getattr(element, "metadata", None), "image_base64", None)
+                text_content = text_content or None
+
+            db.add(
+                DocumentPartitionItem(
+                    document_id=document.id,
+                    workspace_id=document.workspace_id,
+                    element_index=index,
+                    content_type=content_type,
+                    element_type=type(element).__name__,
+                    category=getattr(element, "category", None),
+                    text=text_content,
+                    table_html=table_html,
+                    image_base64=image_base64,
+                    element_metadata=element_metadata,
+                )
+            )
+
+        db.commit()
+
+
 def build_partition_metadata(elements) -> dict:
     categories = Counter(getattr(element, "category", type(element).__name__) for element in elements)
     element_types = Counter(type(element).__name__ for element in elements)
@@ -95,6 +160,14 @@ def build_partition_metadata(elements) -> dict:
             "tables": table_count,
             "categories": dict(categories),
             "element_types": dict(element_types),
+        }
+    }
+
+
+def build_chunking_metadata(chunks) -> dict:
+    return {
+        "chunking": {
+            "chunks_created": len(chunks),
         }
     }
 
@@ -151,6 +224,7 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
         try:
             update_document_status(document_id, "processing", "partitioning")
             elements = partition_document(document.storage_path)
+            store_document_partition_items(document, elements)
             update_document_processing_metadata(
                 document_id,
                 build_partition_metadata(elements),
@@ -158,6 +232,10 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
 
             update_document_status(document_id, "processing", "chunking")
             chunks = create_chunks_by_title(elements)
+            update_document_processing_metadata(
+                document_id,
+                build_chunking_metadata(chunks),
+            )
 
             update_document_status(document_id, "processing", "summarizing")
             documents = summarize_chunks(chunks)

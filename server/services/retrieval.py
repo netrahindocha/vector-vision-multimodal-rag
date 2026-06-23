@@ -4,6 +4,8 @@ from typing import Any
 
 from langchain_core.documents import Document as LangChainDocument
 
+from database import SessionLocal
+from models import DocumentPartitionItem
 from rag.pipeline import generate_final_answer, load_existing_vector_store
 
 
@@ -112,6 +114,42 @@ def answer_workspace_query(
         "answer": answer,
         "sources": [build_source(chunk) for chunk in chunks],
     }
+
+
+def get_document_partition_items(
+    workspace_id: uuid.UUID | str,
+    document_id: uuid.UUID | str,
+    content_type: str = "all",
+) -> dict[str, Any]:
+    with SessionLocal() as db:
+        query = db.query(DocumentPartitionItem).filter(
+            DocumentPartitionItem.workspace_id == uuid.UUID(str(workspace_id)),
+            DocumentPartitionItem.document_id == uuid.UUID(str(document_id)),
+        )
+        if content_type != "all":
+            query = query.filter(DocumentPartitionItem.content_type == content_type)
+
+        items = query.order_by(DocumentPartitionItem.element_index).all()
+
+        return {
+            "workspace_id": str(workspace_id),
+            "document_id": str(document_id),
+            "content_type": content_type,
+            "items": [
+                {
+                    "id": str(item.id),
+                    "element_index": item.element_index,
+                    "content_type": item.content_type,
+                    "element_type": item.element_type,
+                    "category": item.category,
+                    "text": item.text,
+                    "table_html": item.table_html,
+                    "image_base64": item.image_base64,
+                    "metadata": item.element_metadata or {},
+                }
+                for item in items
+            ],
+        }
 
 
 def get_document_chunks(

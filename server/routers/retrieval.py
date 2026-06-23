@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -10,6 +10,7 @@ from services.retrieval import (
     VectorStoreUnavailableError,
     answer_workspace_query,
     get_document_chunks,
+    get_document_partition_items,
     search_workspace,
 )
 
@@ -34,6 +35,17 @@ def search_documents(
         return search_workspace(workspace_id, request.query, request.top_k)
     except VectorStoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/documents/{document_id}/partition-items")
+def get_document_partition_item_details(
+    document_id: uuid.UUID,
+    content_type: str = Query("all", pattern="^(all|text|image|table)$"),
+    workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    ensure_workspace_exists(workspace_id, db)
+    return get_document_partition_items(workspace_id, document_id, content_type)
 
 
 @router.get("/documents/{document_id}/chunks")

@@ -36,6 +36,9 @@ export type ProcessingMetadata = {
     categories?: Record<string, number>;
     element_types?: Record<string, number>;
   };
+  chunking?: {
+    chunks_created?: number;
+  };
   [key: string]: unknown;
 };
 
@@ -81,6 +84,25 @@ export type DocumentChunksResponse = {
   workspace_id: string;
   document_id: string;
   chunks: DocumentChunk[];
+};
+
+export type DocumentPartitionItem = {
+  id: string;
+  element_index: number;
+  content_type: "text" | "image" | "table";
+  element_type: string;
+  category: string | null;
+  text: string | null;
+  table_html: string | null;
+  image_base64: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type DocumentPartitionItemsResponse = {
+  workspace_id: string;
+  document_id: string;
+  content_type: string;
+  items: DocumentPartitionItem[];
 };
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -177,6 +199,21 @@ export function searchDocuments(
     },
     body: JSON.stringify({ query, top_k: topK }),
   });
+}
+
+export function getDocumentPartitionItems(
+  workspaceId: string,
+  documentId: string,
+  contentType: "text" | "image" | "table" | "all" = "all",
+): Promise<DocumentPartitionItemsResponse> {
+  return requestJson<DocumentPartitionItemsResponse>(
+    `/retrieval/documents/${documentId}/partition-items?content_type=${contentType}`,
+    {
+      headers: {
+        "X-Workspace-Id": workspaceId,
+      },
+    },
+  );
 }
 
 export function getDocumentChunks(

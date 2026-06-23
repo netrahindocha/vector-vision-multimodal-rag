@@ -37,11 +37,13 @@ import {
   buildDocumentEventsUrl,
   createWorkspace,
   getDocumentChunks,
+  getDocumentPartitionItems,
   listDocuments,
   listWorkspaces,
   uploadDocument,
   type Document,
   type DocumentChunk,
+  type DocumentPartitionItem,
   type DocumentStatusEvent,
   type ProcessingMetadata,
   type Workspace,
@@ -739,7 +741,12 @@ function UploadDetailsPanel({
   onSectionChange: (section: string) => void;
   workspaceId: string;
 }) {
-  const [partitionView, setPartitionView] = useState<"summary" | "text" | "images" | "tables">("summary");
+  const [partitionView, setPartitionView] = useState<"summary" | "text" | "images" | "tables" | "category">("summary");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [partitionItems, setPartitionItems] = useState<DocumentPartitionItem[]>([]);
+  const [isLoadingPartitionItems, setIsLoadingPartitionItems] = useState(false);
+  const [partitionItemsError, setPartitionItemsError] = useState<string | null>(null);
+  const [chunkView, setChunkView] = useState<"summary" | "all">("summary");
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
   const [chunksError, setChunksError] = useState<string | null>(null);
@@ -752,6 +759,8 @@ function UploadDetailsPanel({
 
   useEffect(() => {
     setPartitionView("summary");
+    setSelectedCategory(null);
+    setChunkView("summary");
   }, [activeSection, documentId]);
 
   useEffect(() => {
@@ -763,19 +772,31 @@ function UploadDetailsPanel({
 
     async function loadChunks() {
       try {
-        setIsLoadingChunks(true);
-        setChunksError(null);
-        const response = await getDocumentChunks(workspaceId, documentId as string);
+        setIsLoadingPartitionItems(true);
+        setPartitionItemsError(null);
+        const contentType =
+          partitionView === "images"
+            ? "image"
+            : partitionView === "tables"
+              ? "table"
+              : partitionView === "category"
+                ? "all"
+                : "text";
+        const response = await getDocumentPartitionItems(workspaceId, documentId as string, contentType);
         if (!ignore) {
-          setChunks(response.chunks);
+          setPartitionItems(
+            partitionView === "category" && selectedCategory
+              ? response.items.filter((item) => item.category === selectedCategory)
+              : response.items,
+          );
         }
       } catch (err) {
         if (!ignore) {
-          setChunksError(err instanceof Error ? err.message : "Failed to load partition content");
+          setPartitionItemsError(err instanceof Error ? err.message : "Failed to load partition content");
         }
       } finally {
         if (!ignore) {
-          setIsLoadingChunks(false);
+          setIsLoadingPartitionItems(false);
         }
       }
     }
@@ -785,7 +806,40 @@ function UploadDetailsPanel({
     return () => {
       ignore = true;
     };
-  }, [activeSection, documentId, partitionView, workspaceId]);
+  }, [activeSection, documentId, partitionView, selectedCategory, workspaceId]);
+
+  useEffect(() => {
+    if (activeSection !== "chunking" || !documentId) {
+      return;
+    }
+
+    let ignore = false;
+
+    async function loadDocumentChunks() {
+      try {
+        setIsLoadingChunks(true);
+        setChunksError(null);
+        const response = await getDocumentChunks(workspaceId, documentId as string);
+        if (!ignore) {
+          setChunks(response.chunks);
+        }
+      } catch (err) {
+        if (!ignore) {
+          setChunksError(err instanceof Error ? err.message : "Failed to load chunks");
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingChunks(false);
+        }
+      }
+    }
+
+    loadDocumentChunks();
+
+    return () => {
+      ignore = true;
+    };
+  }, [activeSection, documentId, workspaceId]);
 
   return (
     <div className="grid min-h-[22rem] gap-5 lg:grid-cols-[13rem_1fr]">
@@ -833,23 +887,44 @@ function UploadDetailsPanel({
                     {Object.entries(partitioning.categories)
                       .filter(([label]) => !["Table", "Image"].includes(label))
                       .map(([label, value]) => (
-                        <DetailMetricCard key={label} label={label} value={value} subtle />
+                        <DetailMetricCard
+                        clickable
+                        key={label}
+                        label={label}
+                        onClick={() => {
+                          setSelectedCategory(label);
+                          setPartitionView("category");
+                        }}
+                        value={value}
+                      />
                       ))}
                   </div>
                 ) : null}
               </>
             ) : (
               <PartitionContentView
-                chunks={chunks}
-                error={chunksError}
-                isLoading={isLoadingChunks}
+                error={partitionItemsError}
+                isLoading={isLoadingPartitionItems}
+                items={partitionItems}
                 onBack={() => setPartitionView("summary")}
+                selectedCategory={selectedCategory}
                 view={partitionView}
               />
             )
           ) : (
             <EmptyDetailsState message="Partition details will appear here after partitioning completes." />
           )
+        ) : activeSection === "chunking" ? (
+          <ChunksDetailsPanel
+            chunks={chunks}
+            error={chunksError}
+            isLoading={isLoadingChunks}
+            onOpenAll={() => setChunkView("all")}
+            onBack={() => setChunkView("summary")}
+            partitionElementCount={partitioning?.elements_found ?? 0}
+            smartChunkCount={latestItemWithMetadata?.processingMetadata?.chunking?.chunks_created ?? chunks.length}
+            view={chunkView}
+          />
         ) : (
           <EmptyDetailsState message="We will design this detail section next." />
         )}
@@ -858,21 +933,166 @@ function UploadDetailsPanel({
   );
 }
 
-function PartitionContentView({
+function ChunksDetailsPanel({
   chunks,
   error,
   isLoading,
   onBack,
+  onOpenAll,
+  partitionElementCount,
+  smartChunkCount,
   view,
 }: {
   chunks: DocumentChunk[];
   error: string | null;
   isLoading: boolean;
   onBack: () => void;
-  view: "text" | "images" | "tables";
+  onOpenAll: () => void;
+  partitionElementCount: number;
+  smartChunkCount: number;
+  view: "summary" | "all";
 }) {
-  const title = view === "text" ? "Texts" : view === "images" ? "Images" : "Tables";
-  const items = buildPartitionContentItems(chunks, view);
+  if (view === "all") {
+    return (
+      <div>
+        <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
+          <button
+            className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-3 py-1 text-cyan-100 transition hover:border-cyan-200/45 hover:text-white"
+            onClick={onBack}
+            type="button"
+          >
+            Chunks
+          </button>
+          <ChevronRight className="h-4 w-4 text-blue-200/50" />
+          <span className="rounded-full border border-blue-300/25 bg-blue-400/10 px-3 py-1 text-blue-100">
+            All chunks
+          </span>
+        </div>
+
+        {isLoading ? (
+          <EmptyDetailsState message="Loading smart chunks..." />
+        ) : error ? (
+          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+        ) : chunks.length === 0 ? (
+          <EmptyDetailsState message="No chunks found for this document yet." />
+        ) : (
+          <div className="max-h-[34rem] space-y-4 overflow-y-auto pr-2">
+            {chunks.map((chunk, index) => (
+              <ChunkContentCard chunk={chunk} index={index} key={`${chunk.chunk_index}-${index}`} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-5">
+        <p className="text-lg font-semibold text-white">Chunk details</p>
+        <p className="mt-1 text-sm text-slate-400">Review how partition elements were grouped into smart retrieval chunks.</p>
+      </div>
+      {error ? (
+        <div className="mb-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+      ) : null}
+      <button
+        className="group w-full rounded-2xl border border-cyan-300/20 bg-gradient-to-r from-cyan-400/[0.08] via-blue-500/[0.07] to-blue-950/30 p-5 text-left transition hover:-translate-y-0.5 hover:border-cyan-200/35 hover:shadow-[0_0_50px_rgba(34,211,238,0.18)]"
+        disabled={isLoading || chunks.length === 0}
+        onClick={onOpenAll}
+        type="button"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="text-lg font-semibold text-cyan-50 drop-shadow-[0_0_14px_rgba(34,211,238,0.35)]">
+            {partitionElementCount} Total Partition Elements
+            <span className="mx-3 text-blue-200/70">→</span>
+            {smartChunkCount} Smart Chunks
+          </p>
+          <Badge className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" variant="outline">
+            Open all
+          </Badge>
+        </div>
+        <p className="mt-2 text-sm text-slate-400">Click to view every chunk with text, rendered images, rendered tables, and content tags.</p>
+      </button>
+    </div>
+  );
+}
+
+function ChunkContentCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
+  const textCount = chunk.raw_text?.trim() ? 1 : 0;
+  const imageCount = chunk.images_base64.length;
+  const tableCount = chunk.tables_html.length;
+
+  return (
+    <div className="rounded-2xl border border-blue-300/15 bg-white/[0.035] p-4 transition hover:border-blue-300/30 hover:shadow-[0_0_45px_rgba(59,130,246,0.2)]">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-blue-100">
+            {index + 1}. Smart Chunk {chunk.chunk_index}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">Stored retrieval chunk content</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <MiniChunkTag className="border-blue-300/30 bg-blue-400/10 text-blue-100" label={`${textCount} text${textCount === 1 ? "" : "s"}`} />
+          <MiniChunkTag className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" label={`${imageCount} image${imageCount === 1 ? "" : "s"}`} />
+          <MiniChunkTag className="border-purple-300/30 bg-purple-400/10 text-purple-100" label={`${tableCount} table${tableCount === 1 ? "" : "s"}`} />
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {chunk.raw_text ? (
+          <p className="whitespace-pre-wrap rounded-xl border border-blue-300/10 bg-black/20 p-4 text-sm leading-6 text-slate-300">{chunk.raw_text}</p>
+        ) : null}
+        {chunk.images_base64.map((image, imageIndex) => (
+          <img
+            alt={`Chunk ${chunk.chunk_index} extracted visual ${imageIndex + 1}`}
+            className="max-h-96 w-full rounded-xl border border-cyan-300/15 bg-black/30 object-contain p-2"
+            key={`${chunk.chunk_index}-image-${imageIndex}`}
+            src={image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`}
+          />
+        ))}
+        {chunk.tables_html.map((table, tableIndex) => (
+          <div
+            className="overflow-auto rounded-xl border border-blue-950/40 bg-white p-3 text-slate-950"
+            dangerouslySetInnerHTML={{ __html: table }}
+            key={`${chunk.chunk_index}-table-${tableIndex}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniChunkTag({ className, label }: { className: string; label: string }) {
+  return (
+    <span className={`rounded-full border px-2.5 py-1 text-xs ${className}`}>
+      {label}
+    </span>
+  );
+}
+
+function PartitionContentView({
+  error,
+  isLoading,
+  items,
+  onBack,
+  selectedCategory,
+  view,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  items: DocumentPartitionItem[];
+  onBack: () => void;
+  selectedCategory: string | null;
+  view: "text" | "images" | "tables" | "category";
+}) {
+  const title =
+    view === "text"
+      ? "Texts"
+      : view === "images"
+        ? "Images"
+        : view === "tables"
+          ? "Tables"
+          : selectedCategory || "Category";
 
   return (
     <div>
@@ -891,11 +1111,11 @@ function PartitionContentView({
       ) : error ? (
         <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
       ) : items.length === 0 ? (
-        <EmptyDetailsState message={`No ${title.toLowerCase()} found in the stored chunk content.`} />
+        <EmptyDetailsState message={`No ${title.toLowerCase()} found in the stored partition content.`} />
       ) : (
         <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-2">
           {items.map((item, index) => (
-            <PartitionContentCard item={item} index={index} key={`${item.type}-${item.chunkIndex}-${index}`} />
+            <PartitionContentCard item={item} index={index} key={item.id} />
           ))}
         </div>
       )}
@@ -903,41 +1123,23 @@ function PartitionContentView({
   );
 }
 
-type PartitionContentItem = {
-  type: "text" | "images" | "tables";
-  chunkIndex: number;
-  value: string;
-};
-
-function buildPartitionContentItems(chunks: DocumentChunk[], view: "text" | "images" | "tables") {
-  return chunks.flatMap((chunk) => {
-    if (view === "text") {
-      return chunk.raw_text ? [{ type: view, chunkIndex: chunk.chunk_index, value: chunk.raw_text }] : [];
-    }
-    if (view === "images") {
-      return chunk.images_base64.map((image) => ({ type: view, chunkIndex: chunk.chunk_index, value: image }));
-    }
-    return chunk.tables_html.map((table) => ({ type: view, chunkIndex: chunk.chunk_index, value: table }));
-  });
-}
-
-function PartitionContentCard({ item, index }: { item: PartitionContentItem; index: number }) {
+function PartitionContentCard({ item, index }: { item: DocumentPartitionItem; index: number }) {
   return (
     <div className="rounded-2xl border border-blue-300/15 bg-white/[0.035] p-4 transition hover:border-blue-300/30 hover:shadow-[0_0_45px_rgba(59,130,246,0.2)]">
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-sm font-medium text-blue-100">
-          {index + 1}. Chunk {item.chunkIndex}
+          {index + 1}. Element {item.element_index}
         </p>
         <Badge className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100" variant="outline">
-          {item.type === "text" ? "Text" : item.type === "images" ? "Image" : "Table"}
+          {item.content_type === "text" ? "Text" : item.content_type === "image" ? "Image" : "Table"}
         </Badge>
       </div>
-      {item.type === "text" ? (
-        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">{item.value}</p>
-      ) : item.type === "images" ? (
-        <img alt={`Extracted visual ${index + 1}`} className="max-h-96 w-full rounded-xl object-contain" src={`data:image/jpeg;base64,${item.value}`} />
+      {item.content_type === "text" ? (
+        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">{item.text}</p>
+      ) : item.content_type === "image" ? (
+        <img alt={`Extracted visual ${index + 1}`} className="max-h-96 w-full rounded-xl object-contain" src={`data:image/jpeg;base64,${item.image_base64}`} />
       ) : (
-        <div className="overflow-auto rounded-xl bg-white p-3 text-slate-950" dangerouslySetInnerHTML={{ __html: item.value }} />
+        <div className="overflow-auto rounded-xl bg-white p-3 text-slate-950" dangerouslySetInnerHTML={{ __html: item.table_html || item.text || "" }} />
       )}
     </div>
   );
