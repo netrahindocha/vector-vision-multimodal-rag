@@ -9,6 +9,7 @@ from schemas import RetrievalAskResponse, RetrievalQueryRequest, RetrievalSearch
 from services.retrieval import (
     VectorStoreUnavailableError,
     answer_workspace_query,
+    get_document_chunks,
     search_workspace,
 )
 
@@ -31,6 +32,20 @@ def search_documents(
 
     try:
         return search_workspace(workspace_id, request.query, request.top_k)
+    except VectorStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/documents/{document_id}/chunks")
+def get_document_chunk_details(
+    document_id: uuid.UUID,
+    workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    ensure_workspace_exists(workspace_id, db)
+
+    try:
+        return get_document_chunks(workspace_id, document_id)
     except VectorStoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

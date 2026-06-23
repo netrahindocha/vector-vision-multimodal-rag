@@ -19,6 +19,7 @@ export type Document = {
   status: string;
   stage: string;
   error_message: string | null;
+  processing_metadata: ProcessingMetadata | null;
   retry_count: number;
   started_at: string | null;
   completed_at: string | null;
@@ -26,9 +27,21 @@ export type Document = {
   updated_at: string;
 };
 
+export type ProcessingMetadata = {
+  partitioning?: {
+    elements_found?: number;
+    text?: number;
+    images?: number;
+    tables?: number;
+    categories?: Record<string, number>;
+    element_types?: Record<string, number>;
+  };
+  [key: string]: unknown;
+};
+
 export type DocumentStatusEvent = Pick<
   Document,
-  "id" | "status" | "stage" | "error_message" | "updated_at"
+  "id" | "status" | "stage" | "error_message" | "updated_at" | "processing_metadata"
 >;
 
 export type RetrievalSource = {
@@ -52,6 +65,22 @@ export type RetrievalAskResponse = {
 export type RetrievalSearchResponse = {
   query: string;
   sources: RetrievalSource[];
+};
+
+export type DocumentChunk = {
+  chunk_index: number;
+  content_types: string[];
+  raw_text: string;
+  tables_html: string[];
+  images_base64: string[];
+  enhanced_content: string;
+  metadata: Record<string, unknown>;
+};
+
+export type DocumentChunksResponse = {
+  workspace_id: string;
+  document_id: string;
+  chunks: DocumentChunk[];
 };
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -147,6 +176,17 @@ export function searchDocuments(
       "X-Workspace-Id": workspaceId,
     },
     body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
+export function getDocumentChunks(
+  workspaceId: string,
+  documentId: string,
+): Promise<DocumentChunksResponse> {
+  return requestJson<DocumentChunksResponse>(`/retrieval/documents/${documentId}/chunks`, {
+    headers: {
+      "X-Workspace-Id": workspaceId,
+    },
   });
 }
 

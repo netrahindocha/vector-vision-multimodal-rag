@@ -112,3 +112,44 @@ def answer_workspace_query(
         "answer": answer,
         "sources": [build_source(chunk) for chunk in chunks],
     }
+
+
+def get_document_chunks(
+    workspace_id: uuid.UUID | str,
+    document_id: uuid.UUID | str,
+) -> dict[str, Any]:
+    vectorstore = load_existing_vector_store()
+    if vectorstore is None:
+        raise VectorStoreUnavailableError("Vector store is not available")
+
+    result = vectorstore.get(where={"document_id": str(document_id)})
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+
+    chunks = []
+    for page_content, metadata in zip(documents, metadatas):
+        metadata = metadata or {}
+        if metadata.get("workspace_id") != str(workspace_id):
+            continue
+
+        original_content = _parse_original_content(metadata)
+        chunks.append(
+            {
+                "chunk_index": _safe_int(metadata.get("chunk_index")),
+                "content_types": _parse_content_types(metadata.get("content_types")),
+                "raw_text": original_content.get("raw_text") or "",
+                "tables_html": original_content.get("tables_html") or [],
+                "images_base64": original_content.get("images_base64") or [],
+                "enhanced_content": page_content,
+                "metadata": {
+                    key: value for key, value in metadata.items() if key != "original_content"
+                },
+            }
+        )
+
+    chunks.sort(key=lambda chunk: chunk["chunk_index"])
+    return {
+        "workspace_id": str(workspace_id),
+        "document_id": str(document_id),
+        "chunks": chunks,
+    }
