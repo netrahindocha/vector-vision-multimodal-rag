@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,6 +18,7 @@ class DocumentRead(BaseModel):
     status: str
     stage: str
     error_message: str | None
+    processing_metadata: dict[str, Any] | None
     retry_count: int
     started_at: datetime | None
     completed_at: datetime | None

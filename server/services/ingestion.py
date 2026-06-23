@@ -1,6 +1,7 @@
 import threading
 import traceback
 import uuid
+from collections import Counter
 
 from sqlalchemy import text
 
@@ -65,6 +66,39 @@ def update_document_status(
         db.commit()
 
 
+def update_document_processing_metadata(
+    document_id: uuid.UUID | str,
+    metadata_update: dict,
+) -> None:
+    with SessionLocal() as db:
+        document = db.get(Document, uuid.UUID(str(document_id)))
+        if document is None:
+            return
+
+        current_metadata = document.processing_metadata or {}
+        document.processing_metadata = {**current_metadata, **metadata_update}
+        db.commit()
+
+
+def build_partition_metadata(elements) -> dict:
+    categories = Counter(getattr(element, "category", type(element).__name__) for element in elements)
+    element_types = Counter(type(element).__name__ for element in elements)
+    table_count = categories.get("Table", 0)
+    image_count = categories.get("Image", 0)
+    text_count = max(len(elements) - table_count - image_count, 0)
+
+    return {
+        "partitioning": {
+            "elements_found": len(elements),
+            "text": text_count,
+            "images": image_count,
+            "tables": table_count,
+            "categories": dict(categories),
+            "element_types": dict(element_types),
+        }
+    }
+
+
 def claim_queued_document(document_id: uuid.UUID | str) -> Document | None:
     with SessionLocal() as db:
         result = db.execute(
@@ -117,6 +151,10 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
         try:
             update_document_status(document_id, "processing", "partitioning")
             elements = partition_document(document.storage_path)
+            update_document_processing_metadata(
+                document_id,
+                build_partition_metadata(elements),
+            )
 
             update_document_status(document_id, "processing", "chunking")
             chunks = create_chunks_by_title(elements)

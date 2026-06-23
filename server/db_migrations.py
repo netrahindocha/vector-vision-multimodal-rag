@@ -9,6 +9,7 @@ def ensure_document_status_columns() -> None:
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'queued'",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS stage VARCHAR(100) NOT NULL DEFAULT 'uploaded'",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS processing_metadata JSONB",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE",

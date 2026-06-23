@@ -27,13 +27,14 @@ def sanitize_filename(filename: str) -> str:
     return safe_name or "uploaded_file"
 
 
-def document_status_payload(document: Document) -> dict[str, str | None]:
+def document_status_payload(document: Document) -> dict:
     return {
         "id": str(document.id),
         "status": document.status,
         "stage": document.stage,
         "error_message": document.error_message,
         "updated_at": document.updated_at.isoformat() if document.updated_at else None,
+        "processing_metadata": document.processing_metadata,
     }
 
 
@@ -129,6 +130,7 @@ async def stream_document_events(
                 payload["stage"],
                 payload["error_message"],
                 payload["updated_at"],
+                json.dumps(payload.get("processing_metadata"), sort_keys=True),
             )
             if signature != last_signature:
                 yield format_sse_event("document_status", payload)
