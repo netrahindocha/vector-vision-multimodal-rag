@@ -202,7 +202,7 @@ function App() {
         className={
           selectedWorkspace && workspaceView === "chat"
             ? "relative z-10 flex min-h-screen w-full flex-col"
-            : "relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-10 lg:px-8"
+            : "relative z-10 mx-auto flex min-h-screen w-full max-w-screen-2xl flex-col px-6 py-10 lg:px-8"
         }
       >
         {selectedWorkspace ? (
@@ -411,15 +411,15 @@ function DocumentsPage({
           </span>
         </nav>
 
-        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+        <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
           <div className="max-w-3xl space-y-5">
-            <Badge
+            {/* <Badge
               className="border-blue-300/30 bg-blue-400/10 text-blue-100 hover:bg-blue-400/15"
               variant="outline"
             >
               <FileText className="mr-1 h-3.5 w-3.5" />
               Workspace documents
-            </Badge>
+            </Badge> */}
             <div className="space-y-4">
               <h1 className="text-4xl font-semibold tracking-tight text-white md:text-6xl">
                 Your Documents
@@ -431,29 +431,31 @@ function DocumentsPage({
               </p>
             </div>
           </div>
-          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-            <Button
-              className="border border-cyan-200/25 bg-cyan-400/10 text-cyan-50 shadow-[0_0_35px_rgba(34,211,238,0.18)] hover:bg-cyan-400/15"
-              disabled={!documents.some((document) => document.status === "completed")}
-              onClick={onWorkspaceChat}
-              title={documents.some((document) => document.status === "completed") ? "Chat across all completed documents" : "Workspace chat is available after at least one document completes ingestion"}
-              variant="outline"
-            >
-              <MessageCircle className="mr-2 h-4 w-4" />
-              Chat with workspace
-            </Button>
-            <Button
-              className="bg-blue-500 text-white shadow-[0_0_35px_rgba(59,130,246,0.45)] hover:bg-blue-400"
-              onClick={onUpload}
-            >
-              <FileText className="mr-2 h-4 w-4" />
-              Upload document(s)
-            </Button>
-            <div className="flex min-w-32 flex-col items-center justify-center rounded-2xl border border-blue-300/15 bg-white/[0.04] px-5 py-4 text-center shadow-[0_0_36px_rgba(59,130,246,0.12)] backdrop-blur-xl">
-              <p className="text-3xl font-semibold leading-none text-white">
+          <div className="flex flex-col items-stretch gap-3 sm:items-end">
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+              <Button
+                className="border border-cyan-200/45 bg-gradient-to-r from-cyan-400/20 via-blue-500/20 to-cyan-300/20 text-cyan-50 shadow-[0_0_34px_rgba(34,211,238,0.36)] transition hover:-translate-y-0.5 hover:border-cyan-100/70 hover:from-cyan-300/30 hover:via-blue-400/30 hover:to-cyan-200/30 hover:shadow-[0_0_52px_rgba(34,211,238,0.5)] disabled:shadow-none"
+                disabled={!documents.some((document) => document.status === "completed")}
+                onClick={onWorkspaceChat}
+                title={documents.some((document) => document.status === "completed") ? "Chat across all completed documents" : "Workspace chat is available after at least one document completes ingestion"}
+                variant="outline"
+              >
+                <MessageCircle className="mr-2 h-4 w-4" />
+                Chat with workspace
+              </Button>
+              <Button
+                className="bg-blue-500 text-white shadow-[0_0_35px_rgba(59,130,246,0.45)] hover:bg-blue-400"
+                onClick={onUpload}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                Upload document(s)
+              </Button>
+            </div>
+            <div className="flex min-w-24 flex-col items-center justify-center rounded-xl border border-blue-300/15 bg-white/[0.04] px-4 py-3 text-center shadow-[0_0_36px_rgba(59,130,246,0.12)] backdrop-blur-xl">
+              <p className="text-2xl font-semibold leading-none text-white">
                 {documents.length}
               </p>
-              <p className="mt-1 text-sm text-slate-400">documents</p>
+              <p className="mt-1 text-xs text-slate-400">documents</p>
             </div>
           </div>
         </div>
@@ -1569,7 +1571,10 @@ function WorkspaceCard({
   )}`;
 
   return (
-    <Card className="group relative mx-auto w-full overflow-hidden border-white/10 bg-slate-950/70 pt-0 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-blue-300/40 hover:shadow-blue-500/20">
+    <Card
+      className="group relative mx-auto w-full cursor-pointer overflow-hidden border-white/10 bg-slate-950/70 pt-0 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-blue-300/40 hover:shadow-blue-500/20 xl:max-w-[24.333rem]"
+      onClick={() => onOpenWorkspace(workspace)}
+    >
       <div className="absolute inset-x-8 top-10 z-10 h-24 rounded-full bg-cyan-300/25 blur-3xl transition duration-300 group-hover:bg-blue-300/40" />
       <div className="absolute inset-0 z-30 aspect-video bg-black/35" />
       <div className="relative z-20 aspect-video w-full overflow-hidden bg-gradient-to-br from-blue-950 via-blue-500 to-cyan-300">
@@ -1663,6 +1668,7 @@ function DocumentChatPage({
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<RetrievalSource | null>(null);
   const [sourceView, setSourceView] = useState<"chunk" | "pdf">("chunk");
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1686,6 +1692,12 @@ function DocumentChatPage({
       container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
     }
   }, [messages, isAsking]);
+
+  useEffect(() => {
+    if (!isAsking) {
+      chatInputRef.current?.focus();
+    }
+  }, [isAsking]);
 
   async function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1866,6 +1878,7 @@ function DocumentChatPage({
           <form className="h-full" onSubmit={handleAsk}>
             <div className="flex h-full gap-3 border border-blue-300/25 bg-[linear-gradient(90deg,rgba(37,99,235,0.18),rgba(0,0,0,0.55),rgba(56,189,248,0.10))] p-2 shadow-[0_0_55px_rgba(59,130,246,0.18)] focus-within:border-sky-200/45 focus-within:shadow-[0_0_70px_rgba(56,189,248,0.22)]">
               <Input
+                ref={chatInputRef}
                 className="h-full border-0 bg-transparent text-base text-white placeholder:text-slate-500 focus-visible:ring-0"
                 disabled={isAsking}
                 onChange={(event) => setQuery(event.target.value)}
@@ -2082,12 +2095,6 @@ function SourceEvidencePanel({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <p className="mb-3 text-xs uppercase tracking-[0.22em] text-slate-500">Metadata</p>
-                <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-400">
-                  {JSON.stringify(source.metadata, null, 2)}
-                </pre>
-              </div>
             </div>
           ) : pdfUrl ? (
             <div className="space-y-3">
@@ -2125,7 +2132,7 @@ function DocumentCard({
   )}`;
 
   return (
-    <Card className="group relative mx-auto w-full overflow-hidden border-white/10 bg-slate-950/70 pt-0 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-blue-300/40 hover:shadow-blue-500/20">
+    <Card className="group relative mx-auto w-full overflow-hidden border-white/10 bg-slate-950/70 pt-0 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-blue-300/40 hover:shadow-blue-500/20 xl:max-w-[24.333rem]">
       <div className="absolute inset-x-8 top-10 z-10 h-24 rounded-full bg-cyan-300/25 blur-3xl transition duration-300 group-hover:bg-blue-300/40" />
       <div className="absolute inset-0 z-30 aspect-video bg-black/35" />
       <div className="relative z-20 aspect-video w-full overflow-hidden bg-gradient-to-br from-slate-950 via-blue-700 to-cyan-300">
@@ -2173,7 +2180,7 @@ function DocumentCard({
       <CardFooter className="relative z-40 flex items-center justify-between gap-3 text-sm text-slate-400">
         <span>Uploaded {formatDate(document.created_at)}</span>
         <button
-          className="inline-flex items-center gap-2 rounded-full border border-cyan-200/20 bg-cyan-100/10 px-3.5 py-2 text-sm font-medium text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200/40 hover:bg-cyan-100/15 hover:shadow-[0_0_26px_rgba(34,211,238,0.18)] disabled:cursor-not-allowed disabled:border-slate-600/30 disabled:bg-slate-800/40 disabled:text-slate-500 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+          className="inline-flex items-center gap-2 rounded-full border border-cyan-200/45 bg-gradient-to-r from-cyan-400/20 via-blue-500/20 to-cyan-300/20 px-3.5 py-2 text-sm font-medium text-cyan-50 shadow-[0_0_24px_rgba(34,211,238,0.32)] transition hover:-translate-y-0.5 hover:border-cyan-100/70 hover:from-cyan-300/30 hover:via-blue-400/30 hover:to-cyan-200/30 hover:shadow-[0_0_38px_rgba(34,211,238,0.48)] disabled:cursor-not-allowed disabled:border-slate-600/30 disabled:bg-slate-800/40 disabled:bg-none disabled:text-slate-500 disabled:shadow-none disabled:hover:translate-y-0 disabled:hover:shadow-none"
           disabled={document.status !== "completed"}
           onClick={() => onChat(document)}
           title={document.status === "completed" ? "Chat with this document" : "Chat is available after ingestion completes"}
