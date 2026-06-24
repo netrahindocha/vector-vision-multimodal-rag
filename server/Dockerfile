@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG UNSTRUCTURED_IMAGE=downloads.unstructured.io/unstructured-io/unstructured:latest
+ARG UNSTRUCTURED_IMAGE=downloads.unstructured.io/unstructured-io/unstructured@sha256:ba24bd28244bbfdbce054dd1ee516d6a2eb984ece4ccb550dd95fe09ca228672
 FROM ${UNSTRUCTURED_IMAGE}
 
 USER root

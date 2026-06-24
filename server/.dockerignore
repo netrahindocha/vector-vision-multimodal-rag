@@ -1,0 +1,41 @@
+# Python dependencies/environments should not be copied from the host.
+# The image uses the base image venv at /app/.venv and installs requirements during build.
+.venv
+venv
+env
+ENV
+
+# Python cache/test artifacts
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+
+# Local data, generated artifacts, and caches
+uploads
+db
+*.sqlite
+*.sqlite3
+.cache
+
+# Secrets/local env files: compose reads server/.env from the host; do not bake it into the image.
+.env
+.env.*
+!.env.example
+
+# VCS/editor/OS noise
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docker files are not needed in the copied app source
+Dockerfile
+.dockerignore

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
     environment:
       POSTGRES_DB: rag_app
       POSTGRES_USER: rag_user
@@ -11,7 +11,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     ports:
       - "8001:8000"
     environment:
@@ -21,7 +21,7 @@ services:
       - chroma-data:/chroma/chroma
 
   redis:
-    image: redis:7-alpine
+    image: redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:
       - "6379:6379"
     volumes:
@@ -31,7 +31,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    image: rag-backend
+    image: rag-backend:local
     ports:
       - "8000:8000"
     depends_on:
@@ -55,7 +55,7 @@ services:
       - unstructured-cache:/home/notebook-user/.cache
 
   celery_worker:
-    image: rag-backend
+    image: rag-backend:local
     build:
       context: ./server
       dockerfile: Dockerfile
@@ -84,7 +84,7 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
-    image: rag-frontend
+    image: rag-frontend:local
     ports:
       - "3000:80"
     depends_on:
