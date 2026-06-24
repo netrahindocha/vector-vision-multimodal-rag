@@ -348,16 +348,8 @@ CONTENT TO ANALYZE:
 
                 prompt_text += "\n"
 
-        prompt_text += """
-Please provide a clear, comprehensive answer using the text, tables, and images above.
-
-If the retrieved content directly answers the user's question, answer it clearly and cite the relevant facts.
-
-If the retrieved content is related but does not directly answer the user's question, use this response format:
-"I could not find a direct answer to your question: '<user question>'. However, the retrieved documents do contain related information about <briefly list related topics or facts found>. This related information may be useful, but it does not directly answer the exact question asked."
-
-If the retrieved content is unrelated to the user's question, say exactly:
-"I could not find relevant information in the retrieved documents to answer your question."
+            prompt_text += """
+Please provide a clear, comprehensive answer using the text, tables, and images above. If the document don't contain sufficient information to answer the question, say "I don't have enough information to answer that question based on the provided documents."
 
 ANSWER:"""
 
