@@ -74,6 +74,9 @@ def build_source(chunk: LangChainDocument) -> dict[str, Any]:
         "chunk_index": _safe_int(metadata.get("chunk_index"))
         if metadata.get("chunk_index") is not None
         else None,
+        "page_number": _safe_int(metadata.get("page_number"))
+        if metadata.get("page_number") is not None
+        else None,
         "content_types": _parse_content_types(metadata.get("content_types")),
         "table_count": _safe_int(metadata.get("table_count")),
         "image_count": _safe_int(metadata.get("image_count")),
@@ -244,6 +247,9 @@ def get_document_chunks(
                 {
                     "chunk_index": chunk.chunk_index,
                     "content_types": chunk.content_types or [],
+                    "page_number": _safe_int((chunk.chunk_metadata or {}).get("page_number"))
+                    if (chunk.chunk_metadata or {}).get("page_number") is not None
+                    else None,
                     "raw_text": chunk.raw_text or "",
                     "tables_html": chunk.tables_html or [],
                     "images_base64": chunk.images_base64 or [],

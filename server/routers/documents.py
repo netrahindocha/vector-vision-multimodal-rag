@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -155,6 +155,28 @@ async def stream_document_events(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get("/{document_id}/file")
+def get_document_file(
+    document_id: uuid.UUID,
+    workspace_id: uuid.UUID = Query(...),
+    db: Session = Depends(get_db),
+):
+    document = db.get(Document, document_id)
+    if document is None or document.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = Path(document.storage_path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    return FileResponse(
+        path=file_path,
+        media_type=document.content_type or "application/octet-stream",
+        filename=document.original_filename,
+        content_disposition_type="inline",
     )
 
 

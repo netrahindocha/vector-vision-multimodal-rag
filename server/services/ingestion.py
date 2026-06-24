@@ -9,6 +9,7 @@ from sqlalchemy import text
 from database import SessionLocal
 from models import Document, DocumentChunk, DocumentPartitionItem
 from rag.pipeline import (
+    analyze_chunk_content,
     create_chunks_by_title,
     create_vector_store,
     partition_document,
@@ -186,6 +187,10 @@ def parse_json_metadata(value, default):
     return default
 
 
+def build_chunk_metadata(metadata: dict) -> dict:
+    return {key: value for key, value in metadata.items() if key != "original_content"}
+
+
 def store_document_chunks(document: Document, chunk_documents) -> None:
     with SessionLocal() as db:
         db.query(DocumentChunk).filter(
@@ -210,12 +215,84 @@ def store_document_chunks(document: Document, chunk_documents) -> None:
                     image_count=int(metadata.get("image_count") or 0),
                     text_length=int(metadata.get("text_length") or 0),
                     enhanced_content=chunk_document.page_content,
-                    chunk_metadata={
-                        key: value for key, value in metadata.items() if key != "original_content"
-                    },
+                    chunk_metadata=build_chunk_metadata(metadata),
                 )
             )
 
+        db.commit()
+
+
+def store_raw_document_chunks(document: Document, chunks) -> None:
+    with SessionLocal() as db:
+        db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document.id
+        ).delete(synchronize_session=False)
+
+        for index, chunk in enumerate(chunks):
+            chunk_content = analyze_chunk_content(chunk)
+            chunk_metadata = {
+                "summary_status": "pending",
+                "is_multimodal": chunk_content["is_multimodal"],
+            }
+            if chunk_content.get("page_number") is not None:
+                chunk_metadata["page_number"] = chunk_content["page_number"]
+
+            db.add(
+                DocumentChunk(
+                    document_id=document.id,
+                    workspace_id=document.workspace_id,
+                    chunk_index=index,
+                    raw_text=chunk_content["raw_text"] or "",
+                    tables_html=chunk_content["tables_html"] or [],
+                    images_base64=chunk_content["images_base64"] or [],
+                    content_types=chunk_content["content_types"] or [],
+                    table_count=int(chunk_content["table_count"] or 0),
+                    image_count=int(chunk_content["image_count"] or 0),
+                    text_length=int(chunk_content["text_length"] or 0),
+                    enhanced_content=chunk_content["raw_text"] or "",
+                    chunk_metadata=chunk_metadata,
+                )
+            )
+
+        db.commit()
+
+
+def update_document_chunk_summary(
+    document: Document,
+    chunk_index: int,
+    chunk_document,
+) -> None:
+    metadata = dict(chunk_document.metadata or {})
+    original_content = parse_json_metadata(metadata.get("original_content"), {})
+    content_types = parse_json_metadata(metadata.get("content_types"), [])
+
+    with SessionLocal() as db:
+        row = (
+            db.query(DocumentChunk)
+            .filter(
+                DocumentChunk.document_id == document.id,
+                DocumentChunk.chunk_index == chunk_index,
+            )
+            .first()
+        )
+
+        if row is None:
+            row = DocumentChunk(
+                document_id=document.id,
+                workspace_id=document.workspace_id,
+                chunk_index=chunk_index,
+            )
+            db.add(row)
+
+        row.raw_text = original_content.get("raw_text") or ""
+        row.tables_html = original_content.get("tables_html") or []
+        row.images_base64 = original_content.get("images_base64") or []
+        row.content_types = content_types if isinstance(content_types, list) else []
+        row.table_count = int(metadata.get("table_count") or 0)
+        row.image_count = int(metadata.get("image_count") or 0)
+        row.text_length = int(metadata.get("text_length") or 0)
+        row.enhanced_content = chunk_document.page_content
+        row.chunk_metadata = build_chunk_metadata(metadata)
         db.commit()
 
 
@@ -283,6 +360,7 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
                 document_id,
                 build_chunking_metadata(chunks),
             )
+            store_raw_document_chunks(document, chunks)
 
             update_document_status(document_id, "processing", "summarizing")
             documents = []
@@ -297,9 +375,8 @@ def process_document_ingestion(document_id: uuid.UUID | str) -> None:
                         "chunk_index": index,
                     }
                 )
+                update_document_chunk_summary(document, index, chunk_document)
                 documents.append(chunk_document)
-
-            store_document_chunks(document, documents)
 
             update_document_status(document_id, "processing", "embedding")
             create_vector_store(documents)

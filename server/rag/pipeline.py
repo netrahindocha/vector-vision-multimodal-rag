@@ -141,48 +141,96 @@ Do not simply copy the raw text. Return only the generated summary.
         return summary, "fallback"
 
 
+def extract_page_number(chunk) -> int | None:
+    page_numbers = []
+
+    metadata = getattr(chunk, "metadata", None)
+    direct_page_number = getattr(metadata, "page_number", None) if metadata else None
+    if direct_page_number is not None:
+        page_numbers.append(direct_page_number)
+
+    orig_elements = getattr(metadata, "orig_elements", []) if metadata else []
+    for element in orig_elements:
+        element_metadata = getattr(element, "metadata", None)
+        page_number = getattr(element_metadata, "page_number", None) if element_metadata else None
+        if page_number is not None:
+            page_numbers.append(page_number)
+
+    normalized_pages = []
+    for page_number in page_numbers:
+        try:
+            normalized_pages.append(int(page_number))
+        except (TypeError, ValueError):
+            continue
+
+    return min(normalized_pages) if normalized_pages else None
+
+
+def analyze_chunk_content(chunk) -> dict:
+    content_data = separate_content_types(chunk)
+    page_number = extract_page_number(chunk)
+    is_multimodal = bool(content_data["tables"] or content_data["images"])
+
+    analyzed = {
+        "raw_text": content_data["text"],
+        "tables_html": content_data["tables"],
+        "images_base64": content_data["images"],
+        "content_types": content_data["types"],
+        "table_count": len(content_data["tables"]),
+        "image_count": len(content_data["images"]),
+        "text_length": len(content_data["text"] or ""),
+        "is_multimodal": is_multimodal,
+    }
+    if page_number is not None:
+        analyzed["page_number"] = page_number
+
+    return analyzed
+
+
 def summarize_one_chunk(chunk, index: int = 0, total_chunks: int = 1):
     current_chunk = index + 1
     print(f"Processing chunk {current_chunk}/{total_chunks}")
 
-    content_data = separate_content_types(chunk)
+    chunk_content = analyze_chunk_content(chunk)
 
-    print(f"Types found: {content_data['types']}")
-    print(f"Tables: {len(content_data['tables'])}, Images: {len(content_data['images'])}")
+    print(f"Types found: {chunk_content['content_types']}")
+    print(f"Tables: {chunk_content['table_count']}, Images: {chunk_content['image_count']}")
 
-    is_multimodal = bool(content_data["tables"] or content_data["images"])
-
-    if is_multimodal:
+    if chunk_content["is_multimodal"]:
         print(f"\nCreating AI summary for mixed content...")
         enhanced_content, summary_status = create_ai_enhanced_summary(
-            content_data["text"],
-            content_data["tables"],
-            content_data["images"],
+            chunk_content["raw_text"],
+            chunk_content["tables_html"],
+            chunk_content["images_base64"],
         )
         print(f"\nSummary status: {summary_status}")
         print(f"\nEnhanced content preview: {enhanced_content[:200]}...")
     else:
         print(f"Using raw text (no tables/images)")
-        enhanced_content = content_data["text"]
+        enhanced_content = chunk_content["raw_text"]
         summary_status = "raw_text"
+
+    metadata = {
+        "original_content": json.dumps(
+            {
+                "raw_text": chunk_content["raw_text"],
+                "tables_html": chunk_content["tables_html"],
+                "images_base64": chunk_content["images_base64"],
+            }
+        ),
+        "content_types": json.dumps(chunk_content["content_types"]),
+        "table_count": chunk_content["table_count"],
+        "image_count": chunk_content["image_count"],
+        "text_length": chunk_content["text_length"],
+        "summary_status": summary_status,
+        "is_multimodal": chunk_content["is_multimodal"],
+    }
+    if chunk_content.get("page_number") is not None:
+        metadata["page_number"] = chunk_content["page_number"]
 
     return Document(
         page_content=enhanced_content,
-        metadata={
-            "original_content": json.dumps(
-                {
-                    "raw_text": content_data["text"],
-                    "tables_html": content_data["tables"],
-                    "images_base64": content_data["images"],
-                }
-            ),
-            "content_types": json.dumps(content_data["types"]),
-            "table_count": len(content_data["tables"]),
-            "image_count": len(content_data["images"]),
-            "text_length": len(content_data["text"] or ""),
-            "summary_status": summary_status,
-            "is_multimodal": is_multimodal,
-        },
+        metadata=metadata,
     )
 
 
@@ -300,8 +348,16 @@ CONTENT TO ANALYZE:
 
                 prompt_text += "\n"
 
-            prompt_text += """
-Please provide a clear, comprehensive answer using the text, tables, and images above. If the document don't contain sufficient information to answer the question, say "I don't have enough information to answer that question based on the provided documents."
+        prompt_text += """
+Please provide a clear, comprehensive answer using the text, tables, and images above.
+
+If the retrieved content directly answers the user's question, answer it clearly and cite the relevant facts.
+
+If the retrieved content is related but does not directly answer the user's question, use this response format:
+"I could not find a direct answer to your question: '<user question>'. However, the retrieved documents do contain related information about <briefly list related topics or facts found>. This related information may be useful, but it does not directly answer the exact question asked."
+
+If the retrieved content is unrelated to the user's question, say exactly:
+"I could not find relevant information in the retrieved documents to answer your question."
 
 ANSWER:"""
 

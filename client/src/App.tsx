@@ -41,7 +41,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   askDocumentQuestion,
+  askQuestion,
   buildDocumentEventsUrl,
+  buildDocumentFileUrl,
   createWorkspace,
   getDocumentChunks,
   getDocumentPartitionItems,
@@ -66,7 +68,7 @@ function App() {
   const [workspaceView, setWorkspaceView] = useState<"documents" | "upload" | "chat">(
     "documents",
   );
-  const [selectedChatDocument, setSelectedChatDocument] = useState<Document | null>(null);
+  const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDocumentsLoading, setIsDocumentsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,12 +215,13 @@ function App() {
               }}
               workspace={selectedWorkspace}
             />
-          ) : workspaceView === "chat" && selectedChatDocument ? (
+          ) : workspaceView === "chat" && chatTarget ? (
             <DocumentChatPage
-              document={selectedChatDocument}
+              chatTarget={chatTarget}
               documents={documents}
               onBack={() => setWorkspaceView("documents")}
-              onSelectDocument={(document) => setSelectedChatDocument(document)}
+              onSelectDocument={(document) => setChatTarget({ type: "document", document })}
+              onSelectWorkspace={() => setChatTarget({ type: "workspace" })}
               workspace={selectedWorkspace}
             />
           ) : (
@@ -228,10 +231,14 @@ function App() {
               isLoading={isDocumentsLoading}
               onBack={() => setSelectedWorkspace(null)}
               onChat={(document) => {
-                setSelectedChatDocument(document);
+                setChatTarget({ type: "document", document });
                 setWorkspaceView("chat");
               }}
               onUpload={() => setWorkspaceView("upload")}
+              onWorkspaceChat={() => {
+                setChatTarget({ type: "workspace" });
+                setWorkspaceView("chat");
+              }}
               workspace={selectedWorkspace}
             />
           )
@@ -374,6 +381,7 @@ function DocumentsPage({
   onBack,
   onChat,
   onUpload,
+  onWorkspaceChat,
   workspace,
 }: {
   documents: Document[];
@@ -382,6 +390,7 @@ function DocumentsPage({
   onBack: () => void;
   onChat: (document: Document) => void;
   onUpload: () => void;
+  onWorkspaceChat: () => void;
   workspace: Workspace;
 }) {
   return (
@@ -423,6 +432,16 @@ function DocumentsPage({
             </div>
           </div>
           <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+            <Button
+              className="border border-cyan-200/25 bg-cyan-400/10 text-cyan-50 shadow-[0_0_35px_rgba(34,211,238,0.18)] hover:bg-cyan-400/15"
+              disabled={!documents.some((document) => document.status === "completed")}
+              onClick={onWorkspaceChat}
+              title={documents.some((document) => document.status === "completed") ? "Chat across all completed documents" : "Workspace chat is available after at least one document completes ingestion"}
+              variant="outline"
+            >
+              <MessageCircle className="mr-2 h-4 w-4" />
+              Chat with workspace
+            </Button>
             <Button
               className="bg-blue-500 text-white shadow-[0_0_35px_rgba(59,130,246,0.45)] hover:bg-blue-400"
               onClick={onUpload}
@@ -1605,43 +1624,61 @@ type ChatMessage = {
   sources?: RetrievalSource[];
 };
 
+type ChatTarget =
+  | { type: "workspace" }
+  | { type: "document"; document: Document };
+
+function getChatWelcomeMessage(chatTarget: ChatTarget, workspace: Workspace) {
+  if (chatTarget.type === "workspace") {
+    return `Ask me anything about "${workspace.name}". I’ll search across all completed documents in this workspace.`;
+  }
+
+  return `Ask me anything about "${chatTarget.document.original_filename}". I’ll only use this document to answer.`;
+}
+
 function DocumentChatPage({
-  document,
+  chatTarget,
   documents,
   onBack,
   onSelectDocument,
+  onSelectWorkspace,
   workspace,
 }: {
-  document: Document;
+  chatTarget: ChatTarget;
   documents: Document[];
   onBack: () => void;
   onSelectDocument: (document: Document) => void;
+  onSelectWorkspace: () => void;
   workspace: Workspace;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "assistant",
-      content: `Hi, I can answer questions using only ${document.original_filename}.`,
+      content: getChatWelcomeMessage(chatTarget, workspace),
     },
   ]);
   const [query, setQuery] = useState("");
   const [isAsking, setIsAsking] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [selectedSource, setSelectedSource] = useState<RetrievalSource | null>(null);
+  const [sourceView, setSourceView] = useState<"chunk" | "pdf">("chunk");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setMessages([
       {
-        id: `welcome-${document.id}`,
+        id: `welcome-${chatTarget.type}-${chatTarget.type === "document" ? chatTarget.document.id : workspace.id}`,
         role: "assistant",
-        content: `Hi, I can answer questions using only ${document.original_filename}.`,
+        content: getChatWelcomeMessage(chatTarget, workspace),
       },
     ]);
     setQuery("");
     setChatError(null);
-  }, [document.id, document.original_filename]);
+    setSelectedSource(null);
+    setSourceView("chunk");
+  }, [chatTarget, workspace]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -1666,7 +1703,9 @@ function DocumentChatPage({
     setIsAsking(true);
 
     try {
-      const response = await askDocumentQuestion(workspace.id, document.id, question, 4);
+      const response = chatTarget.type === "workspace"
+        ? await askQuestion(workspace.id, question, 3)
+        : await askDocumentQuestion(workspace.id, chatTarget.document.id, question, 3);
       setMessages((current) => [
         ...current,
         {
@@ -1683,8 +1722,17 @@ function DocumentChatPage({
     }
   }
 
+  const chatTitle = chatTarget.type === "workspace" ? workspace.name : chatTarget.document.original_filename;
+  const chatSubtitle = chatTarget.type === "workspace"
+    ? "Workspace chat · all completed documents"
+    : `${getDocumentType(chatTarget.document)} · ${formatBytes(chatTarget.document.size_bytes)} · Uploaded ${formatDate(chatTarget.document.created_at)}`;
+  const chatBadge = chatTarget.type === "workspace" ? "Workspace" : getDocumentType(chatTarget.document);
+  const inputPlaceholder = chatTarget.type === "workspace"
+    ? "Ask anything about this workspace..."
+    : "Ask anything about this document...";
+
   return (
-    <div className="fixed inset-0 z-50 grid grid-cols-[420px_minmax(0,1fr)] bg-black text-white">
+    <div className={`fixed inset-0 z-50 grid bg-black text-white ${selectedSource ? "grid-cols-[360px_minmax(0,1fr)_400px]" : "grid-cols-[360px_minmax(0,1fr)]"}`}>
       <aside className="h-screen min-h-0 overflow-hidden border-r border-blue-300/20 bg-[linear-gradient(180deg,#020617_0%,#000814_42%,#000_100%)]">
         <div className="h-36 border-b border-blue-300/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.28),rgba(2,6,23,0.96)_52%,rgba(56,189,248,0.16))] px-6 py-5">
           <button
@@ -1700,8 +1748,29 @@ function DocumentChatPage({
         </div>
 
         <div className="h-[calc(100vh-9rem)] overflow-y-auto [scrollbar-color:rgba(96,165,250,0.5)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-blue-400/50 [&::-webkit-scrollbar-track]:bg-transparent">
+          <div className="border-b border-blue-200/10 p-4">
+            <p className="mb-3 px-2 text-xs uppercase tracking-[0.24em] text-blue-200/60">Workspace chat</p>
+            <button
+              className={`relative flex w-full gap-4 rounded-2xl border px-4 py-4 text-left transition ${
+                chatTarget.type === "workspace"
+                  ? "border-cyan-200/50 bg-cyan-300/15 text-white shadow-[0_0_34px_rgba(34,211,238,0.18)]"
+                  : "border-blue-300/15 bg-blue-950/20 text-slate-300 hover:border-cyan-200/30 hover:bg-cyan-300/10 hover:text-white"
+              }`}
+              onClick={onSelectWorkspace}
+              type="button"
+            >
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center border border-cyan-300/30 bg-cyan-300/10 text-cyan-100">
+                <BriefcaseBusiness className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <p className="line-clamp-1 text-sm font-semibold">{workspace.name}</p>
+                <p className="mt-1 text-xs text-slate-500">All completed documents</p>
+              </div>
+            </button>
+          </div>
+          <p className="px-6 pb-2 pt-5 text-xs uppercase tracking-[0.24em] text-blue-200/60">Documents</p>
           {documents.map((item) => {
-            const isActive = item.id === document.id;
+            const isActive = chatTarget.type === "document" && item.id === chatTarget.document.id;
             const isCompleted = item.status === "completed";
             return (
               <button
@@ -1748,14 +1817,14 @@ function DocumentChatPage({
                 <span className="text-sky-100">Chat</span>
               </div>
               <h1 className="line-clamp-1 text-2xl font-semibold tracking-tight text-white">
-                {document.original_filename}
+                {chatTitle}
               </h1>
               <p className="mt-1 text-sm text-slate-400">
-                {getDocumentType(document)} · {formatBytes(document.size_bytes)} · Uploaded {formatDate(document.created_at)}
+                {chatSubtitle}
               </p>
             </div>
             <div className="hidden items-center gap-2 md:flex">
-              <span className="border border-blue-300/25 bg-blue-400/10 px-3 py-1 text-xs text-blue-100">{getDocumentType(document)}</span>
+              <span className="border border-blue-300/25 bg-blue-400/10 px-3 py-1 text-xs text-blue-100">{chatBadge}</span>
               <span className="border border-sky-300/25 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">{messages.length} messages</span>
             </div>
           </div>
@@ -1765,15 +1834,22 @@ function DocumentChatPage({
           className="relative z-10 min-h-0 overflow-y-auto [scrollbar-color:rgba(96,165,250,0.45)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-blue-400/45 [&::-webkit-scrollbar-track]:bg-transparent"
           ref={messagesContainerRef}
         >
-          <div className="mx-auto w-full max-w-6xl px-10 py-10">
-            <div className="space-y-10">
+          <div className="mx-auto w-full max-w-5xl px-6 py-7">
+            <div className="space-y-7">
               {messages.map((message) => (
-                <ChatBubble message={message} key={message.id} />
+                <ChatBubble
+                  message={message}
+                  key={message.id}
+                  onSelectSource={(source) => {
+                    setSelectedSource(source);
+                    setSourceView("chunk");
+                  }}
+                />
               ))}
               {isAsking ? (
                 <div className="flex items-center gap-3 border-l-2 border-sky-300 bg-sky-400/5 px-5 py-3 text-sm text-sky-100 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
                   <Bot className="h-4 w-4" />
-                  Thinking through document embeddings...
+                  Thinking through {chatTarget.type === "workspace" ? "workspace" : "document"} embeddings...
                 </div>
               ) : null}
               <div ref={messagesEndRef} />
@@ -1793,7 +1869,7 @@ function DocumentChatPage({
                 className="h-full border-0 bg-transparent text-base text-white placeholder:text-slate-500 focus-visible:ring-0"
                 disabled={isAsking}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Ask anything about this document..."
+                placeholder={inputPlaceholder}
                 value={query}
               />
               <Button
@@ -1807,11 +1883,27 @@ function DocumentChatPage({
           </form>
         </footer>
       </section>
+
+      {selectedSource ? (
+        <SourceEvidencePanel
+          onClose={() => setSelectedSource(null)}
+          onViewChange={setSourceView}
+          source={selectedSource}
+          view={sourceView}
+          workspaceId={workspace.id}
+        />
+      ) : null}
     </div>
   );
 }
 
-function ChatBubble({ message }: { message: ChatMessage }) {
+function ChatBubble({
+  message,
+  onSelectSource,
+}: {
+  message: ChatMessage;
+  onSelectSource: (source: RetrievalSource) => void;
+}) {
   const isUser = message.role === "user";
   const mediaSources = message.sources?.filter((source) => source.images_base64.length > 0 || source.tables_html.length > 0) ?? [];
 
@@ -1877,9 +1969,14 @@ function ChatBubble({ message }: { message: ChatMessage }) {
               <p className="mb-3 text-xs font-medium uppercase tracking-[0.24em] text-slate-500">Sources:</p>
               <div className="flex flex-wrap gap-x-4 gap-y-2">
                 {message.sources.map((source, index) => (
-                  <span className="text-xs text-blue-200/80 underline decoration-blue-300/30 underline-offset-4" key={`${source.chunk_index}-${index}`}>
-                    Chunk {source.chunk_index ?? index + 1}
-                  </span>
+                  <button
+                    className="text-left text-xs text-blue-200/80 underline decoration-blue-300/30 underline-offset-4 transition hover:text-cyan-100"
+                    key={`${source.document_id}-${source.chunk_index}-${index}`}
+                    onClick={() => onSelectSource(source)}
+                    type="button"
+                  >
+                    {getSourceLabel(source, index)}
+                  </button>
                 ))}
               </div>
             </div>
@@ -1887,6 +1984,130 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function getSourceLabel(source: RetrievalSource, index: number) {
+  const fileName = source.original_filename || "Source";
+  if (source.page_number) {
+    return `${fileName} · Page ${source.page_number}`;
+  }
+  return `${fileName} · Chunk ${source.chunk_index ?? index + 1}`;
+}
+
+function SourceEvidencePanel({
+  onClose,
+  onViewChange,
+  source,
+  view,
+  workspaceId,
+}: {
+  onClose: () => void;
+  onViewChange: (view: "chunk" | "pdf") => void;
+  source: RetrievalSource;
+  view: "chunk" | "pdf";
+  workspaceId: string;
+}) {
+  const pdfUrl = source.document_id
+    ? buildDocumentFileUrl(workspaceId, source.document_id, source.page_number)
+    : null;
+
+  return (
+    <aside className="h-screen min-h-0 overflow-hidden border-l border-cyan-300/20 bg-[linear-gradient(180deg,#020617_0%,#000814_48%,#000_100%)] text-white">
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="border-b border-cyan-300/20 bg-black/50 p-5 backdrop-blur-xl">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Source evidence</p>
+              <h2 className="mt-2 line-clamp-2 text-lg font-semibold text-white">
+                {source.original_filename || "Retrieved source"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                {source.page_number ? `Page ${source.page_number}` : "Page unavailable"} · Chunk {source.chunk_index ?? "—"}
+              </p>
+            </div>
+            <button
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-cyan-200/20 bg-cyan-100/10 text-cyan-50 transition hover:border-cyan-100/40 hover:bg-cyan-100/15"
+              onClick={onClose}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 rounded-full border border-cyan-300/15 bg-white/[0.04] p-1">
+            <button
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                view === "chunk"
+                  ? "bg-cyan-300/15 text-cyan-50 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+                  : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+              }`}
+              onClick={() => onViewChange("chunk")}
+              type="button"
+            >
+              Chunk
+            </button>
+            <button
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                view === "pdf"
+                  ? "bg-cyan-300/15 text-cyan-50 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+                  : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+              }`}
+              onClick={() => onViewChange("pdf")}
+              type="button"
+            >
+              PDF Page
+            </button>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 [scrollbar-color:rgba(34,211,238,0.45)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-cyan-400/45 [&::-webkit-scrollbar-track]:bg-transparent">
+          {view === "chunk" ? (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.04] p-4">
+                <p className="mb-2 text-xs uppercase tracking-[0.22em] text-cyan-200/60">Relevant excerpt</p>
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
+                  {source.content_preview || "No text preview is available for this source."}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-2xl border border-blue-300/15 bg-blue-400/[0.04] p-3">
+                  <p className="text-slate-500">Content</p>
+                  <p className="mt-1 text-blue-100">{source.content_types.join(", ") || "text"}</p>
+                </div>
+                <div className="rounded-2xl border border-blue-300/15 bg-blue-400/[0.04] p-3">
+                  <p className="text-slate-500">Text length</p>
+                  <p className="mt-1 text-blue-100">{source.text_length} chars</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <p className="mb-3 text-xs uppercase tracking-[0.22em] text-slate-500">Metadata</p>
+                <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-400">
+                  {JSON.stringify(source.metadata, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ) : pdfUrl ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-400">
+                Viewing the original PDF{source.page_number ? ` at page ${source.page_number}` : ""}.
+              </p>
+              <iframe
+                className="h-[calc(100vh-13rem)] w-full rounded-2xl border border-cyan-300/20 bg-white"
+                src={pdfUrl}
+                title="PDF source page"
+              />
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-yellow-300/25 bg-yellow-400/10 p-4 text-sm text-yellow-100">
+              The original document is not available for this source.
+            </div>
+          )}
+        </div>
+      </div>
+    </aside>
   );
 }
 

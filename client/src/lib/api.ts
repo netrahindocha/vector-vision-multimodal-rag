@@ -51,6 +51,7 @@ export type RetrievalSource = {
   document_id: string | null;
   original_filename: string | null;
   chunk_index: number | null;
+  page_number: number | null;
   content_types: string[];
   table_count: number;
   image_count: number;
@@ -75,6 +76,7 @@ export type RetrievalSearchResponse = {
 export type DocumentChunk = {
   chunk_index: number;
   content_types: string[];
+  page_number?: number | null;
   raw_text: string;
   tables_html: string[];
   images_base64: string[];
@@ -242,6 +244,20 @@ export function getDocumentChunks(
       "X-Workspace-Id": workspaceId,
     },
   });
+}
+
+export function buildDocumentFileUrl(workspaceId: string, documentId: string, pageNumber?: number | null): string {
+  const path = `${API_BASE_URL}/documents/${documentId}/file`;
+  const query = `workspace_id=${encodeURIComponent(workspaceId)}`;
+  const pageFragment = pageNumber ? `#page=${pageNumber}` : "";
+
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    const url = new URL(path);
+    url.searchParams.set("workspace_id", workspaceId);
+    return `${url.toString()}${pageFragment}`;
+  }
+
+  return `${path}?${query}${pageFragment}`;
 }
 
 export function buildDocumentEventsUrl(workspaceId: string, documentId: string): string {
