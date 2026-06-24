@@ -56,6 +56,8 @@ export type RetrievalSource = {
   image_count: number;
   text_length: number;
   content_preview: string;
+  tables_html: string[];
+  images_base64: string[];
   metadata: Record<string, unknown>;
 };
 
@@ -179,6 +181,21 @@ export function askQuestion(
   topK = 3,
 ): Promise<RetrievalAskResponse> {
   return requestJson<RetrievalAskResponse>("/retrieval/ask", {
+    method: "POST",
+    headers: {
+      "X-Workspace-Id": workspaceId,
+    },
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
+export function askDocumentQuestion(
+  workspaceId: string,
+  documentId: string,
+  query: string,
+  topK = 3,
+): Promise<RetrievalAskResponse> {
+  return requestJson<RetrievalAskResponse>(`/retrieval/documents/${documentId}/ask`, {
     method: "POST",
     headers: {
       "X-Workspace-Id": workspaceId,

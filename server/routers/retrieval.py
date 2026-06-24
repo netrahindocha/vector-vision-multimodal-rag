@@ -8,6 +8,7 @@ from models import Workspace
 from schemas import RetrievalAskResponse, RetrievalQueryRequest, RetrievalSearchResponse
 from services.retrieval import (
     VectorStoreUnavailableError,
+    answer_document_query,
     answer_workspace_query,
     get_document_chunks,
     get_document_partition_items,
@@ -33,6 +34,21 @@ def search_documents(
 
     try:
         return search_workspace(workspace_id, request.query, request.top_k)
+    except VectorStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/documents/{document_id}/ask", response_model=RetrievalAskResponse)
+def ask_document(
+    document_id: uuid.UUID,
+    request: RetrievalQueryRequest,
+    workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    ensure_workspace_exists(workspace_id, db)
+
+    try:
+        return answer_document_query(workspace_id, document_id, request.query, request.top_k)
     except VectorStoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

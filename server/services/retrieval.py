@@ -59,6 +59,9 @@ def build_source(chunk: LangChainDocument) -> dict[str, Any]:
         key: value for key, value in metadata.items() if key != "original_content"
     }
 
+    tables_html = original_content.get("tables_html")
+    images_base64 = original_content.get("images_base64")
+
     return {
         "document_id": metadata.get("document_id"),
         "original_filename": metadata.get("original_filename"),
@@ -70,6 +73,8 @@ def build_source(chunk: LangChainDocument) -> dict[str, Any]:
         "image_count": _safe_int(metadata.get("image_count")),
         "text_length": _safe_int(metadata.get("text_length")),
         "content_preview": _content_preview(chunk, original_content),
+        "tables_html": tables_html if isinstance(tables_html, list) else [],
+        "images_base64": images_base64 if isinstance(images_base64, list) else [],
         "metadata": sanitized_metadata,
     }
 
@@ -87,6 +92,28 @@ def retrieve_workspace_chunks(
         query,
         k=top_k,
         filter={"workspace_id": str(workspace_id)},
+    )
+
+
+def retrieve_document_chunks(
+    workspace_id: uuid.UUID | str,
+    document_id: uuid.UUID | str,
+    query: str,
+    top_k: int = 3,
+) -> list[LangChainDocument]:
+    vectorstore = load_existing_vector_store()
+    if vectorstore is None:
+        raise VectorStoreUnavailableError("Vector store is not available")
+
+    return vectorstore.similarity_search(
+        query,
+        k=top_k,
+        filter={
+            "$and": [
+                {"workspace_id": str(workspace_id)},
+                {"document_id": str(document_id)},
+            ]
+        },
     )
 
 
@@ -108,6 +135,21 @@ def answer_workspace_query(
     top_k: int = 3,
 ) -> dict[str, Any]:
     chunks = retrieve_workspace_chunks(workspace_id, query, top_k)
+    answer = generate_final_answer(chunks, query)
+    return {
+        "query": query,
+        "answer": answer,
+        "sources": [build_source(chunk) for chunk in chunks],
+    }
+
+
+def answer_document_query(
+    workspace_id: uuid.UUID | str,
+    document_id: uuid.UUID | str,
+    query: str,
+    top_k: int = 3,
+) -> dict[str, Any]:
+    chunks = retrieve_document_chunks(workspace_id, document_id, query, top_k)
     answer = generate_final_answer(chunks, query)
     return {
         "query": query,

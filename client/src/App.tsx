@@ -4,13 +4,16 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
   ArrowRight,
+  Bot,
   BriefcaseBusiness,
   ChevronRight,
   CloudUpload,
   FileText,
   MessageCircle,
+  Send,
   Sparkles,
   Upload,
+  User,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +40,7 @@ import { Field, FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  askDocumentQuestion,
   buildDocumentEventsUrl,
   createWorkspace,
   getDocumentChunks,
@@ -49,6 +53,7 @@ import {
   type DocumentPartitionItem,
   type DocumentStatusEvent,
   type ProcessingMetadata,
+  type RetrievalSource,
   type Workspace,
 } from "@/lib/api";
 
@@ -58,9 +63,10 @@ function App() {
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(
     null,
   );
-  const [workspaceView, setWorkspaceView] = useState<"documents" | "upload">(
+  const [workspaceView, setWorkspaceView] = useState<"documents" | "upload" | "chat">(
     "documents",
   );
+  const [selectedChatDocument, setSelectedChatDocument] = useState<Document | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDocumentsLoading, setIsDocumentsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,7 +196,13 @@ function App() {
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
       <BackgroundGlow />
 
-      <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-10 lg:px-8">
+      <section
+        className={
+          selectedWorkspace && workspaceView === "chat"
+            ? "relative z-10 flex min-h-screen w-full flex-col"
+            : "relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-10 lg:px-8"
+        }
+      >
         {selectedWorkspace ? (
           workspaceView === "upload" ? (
             <UploadFilePage
@@ -201,12 +213,24 @@ function App() {
               }}
               workspace={selectedWorkspace}
             />
+          ) : workspaceView === "chat" && selectedChatDocument ? (
+            <DocumentChatPage
+              document={selectedChatDocument}
+              documents={documents}
+              onBack={() => setWorkspaceView("documents")}
+              onSelectDocument={(document) => setSelectedChatDocument(document)}
+              workspace={selectedWorkspace}
+            />
           ) : (
             <DocumentsPage
               documents={documents}
               error={documentsError}
               isLoading={isDocumentsLoading}
               onBack={() => setSelectedWorkspace(null)}
+              onChat={(document) => {
+                setSelectedChatDocument(document);
+                setWorkspaceView("chat");
+              }}
               onUpload={() => setWorkspaceView("upload")}
               workspace={selectedWorkspace}
             />
@@ -348,6 +372,7 @@ function DocumentsPage({
   error,
   isLoading,
   onBack,
+  onChat,
   onUpload,
   workspace,
 }: {
@@ -355,6 +380,7 @@ function DocumentsPage({
   error: string | null;
   isLoading: boolean;
   onBack: () => void;
+  onChat: (document: Document) => void;
   onUpload: () => void;
   workspace: Workspace;
 }) {
@@ -445,7 +471,7 @@ function DocumentsPage({
       ) : (
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {documents.map((document, index) => (
-            <DocumentCard document={document} index={index} key={document.id} />
+            <DocumentCard document={document} index={index} key={document.id} onChat={onChat} />
           ))}
         </div>
       )}
@@ -1572,12 +1598,306 @@ function WorkspaceCard({
   );
 }
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: RetrievalSource[];
+};
+
+function DocumentChatPage({
+  document,
+  documents,
+  onBack,
+  onSelectDocument,
+  workspace,
+}: {
+  document: Document;
+  documents: Document[];
+  onBack: () => void;
+  onSelectDocument: (document: Document) => void;
+  workspace: Workspace;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: `Hi, I can answer questions using only ${document.original_filename}.`,
+    },
+  ]);
+  const [query, setQuery] = useState("");
+  const [isAsking, setIsAsking] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setMessages([
+      {
+        id: `welcome-${document.id}`,
+        role: "assistant",
+        content: `Hi, I can answer questions using only ${document.original_filename}.`,
+      },
+    ]);
+    setQuery("");
+    setChatError(null);
+  }, [document.id, document.original_filename]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages, isAsking]);
+
+  async function handleAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const question = query.trim();
+    if (!question || isAsking) {
+      return;
+    }
+
+    setMessages((current) => [
+      ...current,
+      { id: `user-${Date.now()}`, role: "user", content: question },
+    ]);
+    setQuery("");
+    setChatError(null);
+    setIsAsking(true);
+
+    try {
+      const response = await askDocumentQuestion(workspace.id, document.id, question, 4);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: response.answer,
+          sources: response.sources,
+        },
+      ]);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Failed to ask document");
+    } finally {
+      setIsAsking(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid grid-cols-[420px_minmax(0,1fr)] bg-black text-white">
+      <aside className="h-screen min-h-0 overflow-hidden border-r border-blue-300/20 bg-[linear-gradient(180deg,#020617_0%,#000814_42%,#000_100%)]">
+        <div className="h-36 border-b border-blue-300/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.28),rgba(2,6,23,0.96)_52%,rgba(56,189,248,0.16))] px-6 py-5">
+          <button
+            className="mb-4 inline-flex items-center gap-2 text-sm text-blue-100 transition hover:text-white"
+            onClick={onBack}
+            type="button"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to documents
+          </button>
+          <p className="text-xs uppercase tracking-[0.28em] text-blue-200/70">Workspace</p>
+          <h2 className="mt-2 line-clamp-1 text-xl font-semibold text-white">{workspace.name}</h2>
+        </div>
+
+        <div className="h-[calc(100vh-9rem)] overflow-y-auto [scrollbar-color:rgba(96,165,250,0.5)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-blue-400/50 [&::-webkit-scrollbar-track]:bg-transparent">
+          {documents.map((item) => {
+            const isActive = item.id === document.id;
+            const isCompleted = item.status === "completed";
+            return (
+              <button
+                className={`relative flex w-full gap-4 border-b border-blue-200/10 px-6 py-5 text-left transition ${
+                  isActive
+                    ? "bg-[linear-gradient(90deg,rgba(59,130,246,0.42),rgba(56,189,248,0.16),rgba(0,0,0,0))] text-white shadow-[inset_6px_0_0_#7dd3fc]"
+                    : "bg-transparent text-slate-300 hover:bg-blue-400/10 hover:text-white"
+                } ${!isCompleted ? "cursor-not-allowed opacity-45" : ""}`}
+                disabled={!isCompleted}
+                key={item.id}
+                onClick={() => onSelectDocument(item)}
+                type="button"
+              >
+                <div className={`flex h-12 w-12 shrink-0 items-center justify-center border ${
+                  isActive
+                    ? "border-blue-200/60 bg-blue-300/15 text-blue-100 shadow-[0_0_32px_rgba(125,211,252,0.28)]"
+                    : "border-blue-300/20 bg-blue-950/30 text-blue-200"
+                }`}>
+                  <FileText className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <p className="line-clamp-2 text-sm font-semibold">{item.original_filename}</p>
+                  <p className="mt-1 text-xs text-slate-500">{getDocumentType(item)} · {item.status}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <section className="relative grid h-screen min-h-0 grid-rows-[96px_minmax(0,1fr)_96px] overflow-hidden bg-[radial-gradient(circle_at_30%_0%,rgba(56,189,248,0.20),transparent_30%),radial-gradient(circle_at_80%_18%,rgba(37,99,235,0.18),transparent_32%),linear-gradient(135deg,#000_0%,#020617_48%,#000_100%)]">
+        <div className="pointer-events-none absolute left-1/4 top-0 h-80 w-[38rem] rounded-full bg-blue-400/14 blur-3xl" />
+        <div className="pointer-events-none absolute right-0 top-16 h-80 w-[38rem] rounded-full bg-sky-300/10 blur-3xl" />
+        <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-[34rem] rounded-full bg-blue-900/30 blur-3xl" />
+
+        <header className="relative z-10 border-b border-blue-300/20 bg-black/60 px-7 py-4 backdrop-blur-xl">
+          <div className="flex h-full items-center justify-between gap-6">
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center gap-2 text-xs text-slate-400">
+                <span className="text-blue-200">All Workspaces</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+                <span className="text-blue-100">{workspace.name}</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+                <span className="text-sky-100">Chat</span>
+              </div>
+              <h1 className="line-clamp-1 text-2xl font-semibold tracking-tight text-white">
+                {document.original_filename}
+              </h1>
+              <p className="mt-1 text-sm text-slate-400">
+                {getDocumentType(document)} · {formatBytes(document.size_bytes)} · Uploaded {formatDate(document.created_at)}
+              </p>
+            </div>
+            <div className="hidden items-center gap-2 md:flex">
+              <span className="border border-blue-300/25 bg-blue-400/10 px-3 py-1 text-xs text-blue-100">{getDocumentType(document)}</span>
+              <span className="border border-sky-300/25 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">{messages.length} messages</span>
+            </div>
+          </div>
+        </header>
+
+        <div
+          className="relative z-10 min-h-0 overflow-y-auto [scrollbar-color:rgba(96,165,250,0.45)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-blue-400/45 [&::-webkit-scrollbar-track]:bg-transparent"
+          ref={messagesContainerRef}
+        >
+          <div className="mx-auto w-full max-w-6xl px-10 py-10">
+            <div className="space-y-10">
+              {messages.map((message) => (
+                <ChatBubble message={message} key={message.id} />
+              ))}
+              {isAsking ? (
+                <div className="flex items-center gap-3 border-l-2 border-sky-300 bg-sky-400/5 px-5 py-3 text-sm text-sky-100 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
+                  <Bot className="h-4 w-4" />
+                  Thinking through document embeddings...
+                </div>
+              ) : null}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+        </div>
+
+        <footer className="relative z-20 border-t border-blue-300/20 bg-black/80 p-4 backdrop-blur-xl">
+          {chatError ? (
+            <div className="mb-3 border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+              {chatError}
+            </div>
+          ) : null}
+          <form className="h-full" onSubmit={handleAsk}>
+            <div className="flex h-full gap-3 border border-blue-300/25 bg-[linear-gradient(90deg,rgba(37,99,235,0.18),rgba(0,0,0,0.55),rgba(56,189,248,0.10))] p-2 shadow-[0_0_55px_rgba(59,130,246,0.18)] focus-within:border-sky-200/45 focus-within:shadow-[0_0_70px_rgba(56,189,248,0.22)]">
+              <Input
+                className="h-full border-0 bg-transparent text-base text-white placeholder:text-slate-500 focus-visible:ring-0"
+                disabled={isAsking}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Ask anything about this document..."
+                value={query}
+              />
+              <Button
+                className="h-full bg-[linear-gradient(90deg,#38bdf8,#2563eb,#0f172a)] px-6 text-white shadow-[0_0_35px_rgba(56,189,248,0.32)] hover:opacity-90"
+                disabled={isAsking || !query.trim()}
+                type="submit"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </form>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === "user";
+  const mediaSources = message.sources?.filter((source) => source.images_base64.length > 0 || source.tables_html.length > 0) ?? [];
+
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`w-full max-w-4xl ${isUser ? "ml-auto" : "mr-auto"}`}>
+        <div className={`mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.24em] ${isUser ? "justify-end text-blue-200/70" : "text-cyan-200/70"}`}>
+          {isUser ? "You" : "Assistant"}
+        </div>
+        <div className={`border-l-2 px-5 py-1 ${
+          isUser
+            ? "border-blue-300 bg-[linear-gradient(90deg,transparent,rgba(59,130,246,0.08))] text-blue-50"
+            : "border-cyan-300 bg-[linear-gradient(90deg,rgba(14,165,233,0.08),transparent)] text-slate-300"
+        }`}>
+          {isUser ? (
+            <p className="whitespace-pre-wrap text-base leading-8">{message.content}</p>
+          ) : (
+            <div className="text-base leading-8 text-slate-300">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({ children }) => <h1 className="mb-3 mt-5 text-2xl font-semibold text-white first:mt-0">{children}</h1>,
+                  h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-semibold text-white first:mt-0">{children}</h2>,
+                  h3: ({ children }) => <h3 className="mb-2 mt-5 text-lg font-semibold text-cyan-100 first:mt-0">{children}</h3>,
+                  p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
+                  ul: ({ children }) => <ul className="mb-4 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+                  ol: ({ children }) => <ol className="mb-4 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+                  li: ({ children }) => <li className="pl-1">{children}</li>,
+                  strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          )}
+
+          {!isUser && mediaSources.length ? (
+            <div className="mt-5 space-y-4 border-t border-blue-300/15 pt-5">
+              {mediaSources.flatMap((source, sourceIndex) =>
+                source.images_base64.map((image, imageIndex) => (
+                  <img
+                    alt={`Source chunk ${source.chunk_index} visual ${imageIndex + 1}`}
+                    className="max-h-96 w-full border border-blue-300/20 bg-black/40 object-contain p-2 shadow-[0_0_40px_rgba(59,130,246,0.12)]"
+                    key={`image-${sourceIndex}-${imageIndex}`}
+                    src={image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`}
+                  />
+                )),
+              )}
+              {mediaSources.flatMap((source, sourceIndex) =>
+                source.tables_html.map((table, tableIndex) => (
+                  <div
+                    className="overflow-auto border border-blue-300/20 bg-white p-3 text-slate-950 shadow-[0_0_40px_rgba(59,130,246,0.12)]"
+                    dangerouslySetInnerHTML={{ __html: table }}
+                    key={`table-${sourceIndex}-${tableIndex}`}
+                  />
+                )),
+              )}
+            </div>
+          ) : null}
+
+          {!isUser && message.sources?.length ? (
+            <div className="mt-5 border-t border-blue-300/15 pt-4">
+              <p className="mb-3 text-xs font-medium uppercase tracking-[0.24em] text-slate-500">Sources:</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {message.sources.map((source, index) => (
+                  <span className="text-xs text-blue-200/80 underline decoration-blue-300/30 underline-offset-4" key={`${source.chunk_index}-${index}`}>
+                    Chunk {source.chunk_index ?? index + 1}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocumentCard({
   document,
   index,
+  onChat,
 }: {
   document: Document;
   index: number;
+  onChat: (document: Document) => void;
 }) {
   const imageUrl = `https://avatar.vercel.sh/${encodeURIComponent(document.id)}.svg?text=${encodeURIComponent(
     document.original_filename.slice(0, 2).toUpperCase(),
@@ -1632,7 +1952,10 @@ function DocumentCard({
       <CardFooter className="relative z-40 flex items-center justify-between gap-3 text-sm text-slate-400">
         <span>Uploaded {formatDate(document.created_at)}</span>
         <button
-          className="inline-flex items-center gap-2 rounded-full border border-cyan-200/20 bg-cyan-100/10 px-3.5 py-2 text-sm font-medium text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200/40 hover:bg-cyan-100/15 hover:shadow-[0_0_26px_rgba(34,211,238,0.18)]"
+          className="inline-flex items-center gap-2 rounded-full border border-cyan-200/20 bg-cyan-100/10 px-3.5 py-2 text-sm font-medium text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200/40 hover:bg-cyan-100/15 hover:shadow-[0_0_26px_rgba(34,211,238,0.18)] disabled:cursor-not-allowed disabled:border-slate-600/30 disabled:bg-slate-800/40 disabled:text-slate-500 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+          disabled={document.status !== "completed"}
+          onClick={() => onChat(document)}
+          title={document.status === "completed" ? "Chat with this document" : "Chat is available after ingestion completes"}
           type="button"
         >
           <MessageCircle className="h-4 w-4" />

@@ -17,6 +17,8 @@ class RetrievalSource(BaseModel):
     image_count: int = 0
     text_length: int = 0
     content_preview: str
+    tables_html: list[str] = Field(default_factory=list)
+    images_base64: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
