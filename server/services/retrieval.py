@@ -13,6 +13,12 @@ class VectorStoreUnavailableError(RuntimeError):
     pass
 
 
+DEFAULT_RELEVANCE_SCORE_THRESHOLD = 0.3
+NO_RELEVANT_CONTEXT_ANSWER = (
+    "I don't have enough information to answer that question based on the provided documents."
+)
+
+
 def _parse_content_types(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
@@ -88,11 +94,15 @@ def retrieve_workspace_chunks(
     if vectorstore is None:
         raise VectorStoreUnavailableError("Vector store is not available")
 
-    return vectorstore.similarity_search(
-        query,
-        k=top_k,
-        filter={"workspace_id": str(workspace_id)},
+    retriever = vectorstore.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={
+            "k": top_k,
+            "score_threshold": DEFAULT_RELEVANCE_SCORE_THRESHOLD,
+            "filter": {"workspace_id": str(workspace_id)},
+        },
     )
+    return retriever.invoke(query)
 
 
 def retrieve_document_chunks(
@@ -105,16 +115,20 @@ def retrieve_document_chunks(
     if vectorstore is None:
         raise VectorStoreUnavailableError("Vector store is not available")
 
-    return vectorstore.similarity_search(
-        query,
-        k=top_k,
-        filter={
-            "$and": [
-                {"workspace_id": str(workspace_id)},
-                {"document_id": str(document_id)},
-            ]
+    retriever = vectorstore.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={
+            "k": top_k,
+            "score_threshold": DEFAULT_RELEVANCE_SCORE_THRESHOLD,
+            "filter": {
+                "$and": [
+                    {"workspace_id": str(workspace_id)},
+                    {"document_id": str(document_id)},
+                ]
+            },
         },
     )
+    return retriever.invoke(query)
 
 
 def search_workspace(
@@ -135,6 +149,13 @@ def answer_workspace_query(
     top_k: int = 3,
 ) -> dict[str, Any]:
     chunks = retrieve_workspace_chunks(workspace_id, query, top_k)
+    if not chunks:
+        return {
+            "query": query,
+            "answer": NO_RELEVANT_CONTEXT_ANSWER,
+            "sources": [],
+        }
+
     answer = generate_final_answer(chunks, query)
     return {
         "query": query,
@@ -150,6 +171,13 @@ def answer_document_query(
     top_k: int = 3,
 ) -> dict[str, Any]:
     chunks = retrieve_document_chunks(workspace_id, document_id, query, top_k)
+    if not chunks:
+        return {
+            "query": query,
+            "answer": NO_RELEVANT_CONTEXT_ANSWER,
+            "sources": [],
+        }
+
     answer = generate_final_answer(chunks, query)
     return {
         "query": query,
