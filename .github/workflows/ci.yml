@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test-build-and-push:
+    name: Test, build, and publish images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute image names
+        shell: bash
+        run: |
+          REPOSITORY_LC="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          SHORT_SHA="${GITHUB_SHA::12}"
+          echo "SERVER_IMAGE=ghcr.io/${REPOSITORY_LC}-server" >> "$GITHUB_ENV"
+          echo "CLIENT_IMAGE=ghcr.io/${REPOSITORY_LC}-client" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+
+      - name: Build backend image
+        run: docker build -t "$SERVER_IMAGE:test" ./server
+
+      - name: Run backend unit tests
+        run: docker run --rm "$SERVER_IMAGE:test" python -m pytest -q
+
+      - name: Build frontend image
+        run: docker build -t "$CLIENT_IMAGE:test" ./client
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push backend image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          docker tag "$SERVER_IMAGE:test" "$SERVER_IMAGE:latest"
+          docker tag "$SERVER_IMAGE:test" "$SERVER_IMAGE:sha-$SHORT_SHA"
+          docker push "$SERVER_IMAGE:latest"
+          docker push "$SERVER_IMAGE:sha-$SHORT_SHA"
+
+      - name: Tag and push frontend image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          docker tag "$CLIENT_IMAGE:test" "$CLIENT_IMAGE:latest"
+          docker tag "$CLIENT_IMAGE:test" "$CLIENT_IMAGE:sha-$SHORT_SHA"
+          docker push "$CLIENT_IMAGE:latest"
+          docker push "$CLIENT_IMAGE:sha-$SHORT_SHA"
