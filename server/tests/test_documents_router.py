@@ -6,14 +6,15 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from models import Document, Workspace
+from models import Document, User, Workspace, WorkspaceMember
 from routers import documents as documents_router
 
 
 class FakeDb:
-    def __init__(self, *, workspace=None, document=None):
+    def __init__(self, *, workspace=None, document=None, membership=None):
         self.workspace = workspace
         self.document = document
+        self.membership = membership
         self.added = None
         self.committed = False
         self.refreshed = None
@@ -23,6 +24,12 @@ class FakeDb:
             return self.workspace
         if model is Document and self.document and self.document.id == object_id:
             return self.document
+        if model is WorkspaceMember and self.membership and isinstance(object_id, dict):
+            if (
+                self.membership.workspace_id == object_id.get("workspace_id")
+                and self.membership.user_id == object_id.get("user_id")
+            ):
+                return self.membership
         return None
 
     def add(self, obj):
@@ -33,6 +40,14 @@ class FakeDb:
 
     def refresh(self, obj):
         self.refreshed = obj
+
+
+def make_user() -> User:
+    return User(id=uuid.uuid4(), email="user@example.com", is_active=True)
+
+
+def make_membership(workspace: Workspace, user: User) -> WorkspaceMember:
+    return WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="owner")
 
 
 def test_sanitize_filename_removes_paths_and_unsafe_characters():
@@ -78,7 +93,9 @@ def test_document_status_payload_handles_nullable_fields():
 
 
 def test_get_document_file_rejects_wrong_workspace(tmp_path):
-    workspace_id = uuid.uuid4()
+    user = make_user()
+    workspace = Workspace(id=uuid.uuid4(), name="Research", description=None)
+    membership = make_membership(workspace, user)
     document = Document(
         id=uuid.uuid4(),
         workspace_id=uuid.uuid4(),
@@ -90,15 +107,47 @@ def test_get_document_file_rejects_wrong_workspace(tmp_path):
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        documents_router.get_document_file(document.id, workspace_id=workspace_id, db=FakeDb(document=document))
+        documents_router.get_document_file(
+            document.id,
+            workspace_id=workspace.id,
+            db=FakeDb(workspace=workspace, document=document, membership=membership),
+            current_user=user,
+        )
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Document not found"
 
 
-def test_upload_document_persists_file_and_queues_ingestion(tmp_path, monkeypatch):
+def test_get_document_file_rejects_non_member(tmp_path):
+    user = make_user()
     workspace = Workspace(id=uuid.uuid4(), name="Research", description=None)
-    db = FakeDb(workspace=workspace)
+    document = Document(
+        id=uuid.uuid4(),
+        workspace_id=workspace.id,
+        original_filename="a.pdf",
+        stored_filename="a.pdf",
+        content_type="application/pdf",
+        size_bytes=1,
+        storage_path=str(tmp_path / "a.pdf"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        documents_router.get_document_file(
+            document.id,
+            workspace_id=workspace.id,
+            db=FakeDb(workspace=workspace, document=document),
+            current_user=user,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Workspace not found"
+
+
+def test_upload_document_persists_file_and_queues_ingestion(tmp_path, monkeypatch):
+    user = make_user()
+    workspace = Workspace(id=uuid.uuid4(), name="Research", description=None)
+    membership = make_membership(workspace, user)
+    db = FakeDb(workspace=workspace, membership=membership)
     queued_document_ids: list[str] = []
 
     monkeypatch.setattr(documents_router, "UPLOAD_DIR", tmp_path)
@@ -114,7 +163,12 @@ def test_upload_document_persists_file_and_queues_ingestion(tmp_path, monkeypatc
         file=BytesIO(b"hello world"),
     )
 
-    document = documents_router.upload_document(file=upload, workspace_id=workspace.id, db=db)
+    document = documents_router.upload_document(
+        file=upload,
+        workspace_id=workspace.id,
+        db=db,
+        current_user=user,
+    )
 
     assert db.committed is True
     assert db.added is document
@@ -130,10 +184,16 @@ def test_upload_document_persists_file_and_queues_ingestion(tmp_path, monkeypatc
 
 
 def test_upload_document_returns_404_for_missing_workspace():
+    user = make_user()
     upload = SimpleNamespace(filename="a.pdf", content_type="application/pdf", file=BytesIO(b"x"))
 
     with pytest.raises(HTTPException) as exc_info:
-        documents_router.upload_document(file=upload, workspace_id=uuid.uuid4(), db=FakeDb())
+        documents_router.upload_document(
+            file=upload,
+            workspace_id=uuid.uuid4(),
+            db=FakeDb(),
+            current_user=user,
+        )
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Workspace not found"

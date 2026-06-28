@@ -11,8 +11,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from auth.dependencies import get_current_user
+from auth.documents import require_workspace_document
+from auth.workspaces import require_workspace_member
 from database import SessionLocal, get_db
-from models import Document, Workspace
+from models import Document, User, Workspace
 from schemas import DocumentRead
 from tasks.ingestion_tasks import process_document_ingestion_task
 
@@ -47,10 +50,9 @@ def upload_document(
     file: UploadFile = File(...),
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    workspace = db.get(Workspace, workspace_id)
-    if workspace is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    require_workspace_member(db, current_user, workspace_id)
 
     document_id = uuid.uuid4()
     original_filename = file.filename or "uploaded_file"
@@ -103,10 +105,10 @@ async def stream_document_events(
     request: Request,
     workspace_id: uuid.UUID = Query(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    document = db.get(Document, document_id)
-    if document is None or document.workspace_id != workspace_id:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_workspace_member(db, current_user, workspace_id)
+    require_workspace_document(db, workspace_id, document_id)
 
     async def event_generator():
         last_signature = None
@@ -163,10 +165,10 @@ def get_document_file(
     document_id: uuid.UUID,
     workspace_id: uuid.UUID = Query(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    document = db.get(Document, document_id)
-    if document is None or document.workspace_id != workspace_id:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_workspace_member(db, current_user, workspace_id)
+    document = require_workspace_document(db, workspace_id, document_id)
 
     file_path = Path(document.storage_path)
     if not file_path.exists() or not file_path.is_file():
@@ -185,21 +187,19 @@ def get_document(
     document_id: uuid.UUID,
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    document = db.get(Document, document_id)
-    if document is None or document.workspace_id != workspace_id:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return document
+    require_workspace_member(db, current_user, workspace_id)
+    return require_workspace_document(db, workspace_id, document_id)
 
 
 @router.get("", response_model=list[DocumentRead])
 def list_workspace_documents(
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    workspace = db.get(Workspace, workspace_id)
-    if workspace is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    require_workspace_member(db, current_user, workspace_id)
 
     return db.scalars(
         select(Document)

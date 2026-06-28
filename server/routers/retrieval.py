@@ -3,8 +3,11 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from auth.dependencies import get_current_user
+from auth.documents import require_workspace_document
+from auth.workspaces import require_workspace_member
 from database import get_db
-from models import Workspace
+from models import User
 from schemas import RetrievalAskResponse, RetrievalQueryRequest, RetrievalSearchResponse
 from services.retrieval import (
     VectorStoreUnavailableError,
@@ -18,19 +21,14 @@ from services.retrieval import (
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
 
 
-def ensure_workspace_exists(workspace_id: uuid.UUID, db: Session) -> None:
-    workspace = db.get(Workspace, workspace_id)
-    if workspace is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-
 @router.post("/search", response_model=RetrievalSearchResponse)
 def search_documents(
     request: RetrievalQueryRequest,
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    ensure_workspace_exists(workspace_id, db)
+    require_workspace_member(db, current_user, workspace_id)
 
     try:
         return search_workspace(workspace_id, request.query, request.top_k)
@@ -44,8 +42,10 @@ def ask_document(
     request: RetrievalQueryRequest,
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    ensure_workspace_exists(workspace_id, db)
+    require_workspace_member(db, current_user, workspace_id)
+    require_workspace_document(db, workspace_id, document_id)
 
     try:
         return answer_document_query(workspace_id, document_id, request.query, request.top_k)
@@ -59,8 +59,10 @@ def get_document_partition_item_details(
     content_type: str = Query("all", pattern="^(all|text|image|table)$"),
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    ensure_workspace_exists(workspace_id, db)
+    require_workspace_member(db, current_user, workspace_id)
+    require_workspace_document(db, workspace_id, document_id)
     return get_document_partition_items(workspace_id, document_id, content_type)
 
 
@@ -69,8 +71,10 @@ def get_document_chunk_details(
     document_id: uuid.UUID,
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    ensure_workspace_exists(workspace_id, db)
+    require_workspace_member(db, current_user, workspace_id)
+    require_workspace_document(db, workspace_id, document_id)
 
     try:
         return get_document_chunks(workspace_id, document_id)
@@ -83,8 +87,9 @@ def ask_documents(
     request: RetrievalQueryRequest,
     workspace_id: uuid.UUID = Header(..., alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    ensure_workspace_exists(workspace_id, db)
+    require_workspace_member(db, current_user, workspace_id)
 
     try:
         return answer_workspace_query(workspace_id, request.query, request.top_k)
