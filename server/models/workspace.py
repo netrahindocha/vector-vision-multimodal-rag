@@ -10,6 +10,7 @@ from database import Base
 
 if TYPE_CHECKING:
     from models.document import Document
+    from models.workspace_member import WorkspaceMember
 
 
 class Workspace(Base):
@@ -32,4 +33,7 @@ class Workspace(Base):
 
     documents: Mapped[list["Document"]] = relationship(
         "Document", back_populates="workspace", cascade="all, delete-orphan"
+    )
+    members: Mapped[list["WorkspaceMember"]] = relationship(
+        "WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan"
     )
