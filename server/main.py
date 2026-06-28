@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from database import Base, engine
 from db_migrations import ensure_document_status_columns
+from routers.auth import router as auth_router
 from routers.documents import router as documents_router
 from routers.retrieval import router as retrieval_router
 from routers.workspaces import router as workspaces_router
@@ -34,6 +35,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
 app.include_router(workspaces_router)
 app.include_router(documents_router)
 app.include_router(retrieval_router)

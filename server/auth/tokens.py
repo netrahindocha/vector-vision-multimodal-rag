@@ -4,7 +4,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import jwt
+from jose import JWTError, jwt
 
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
@@ -45,3 +45,14 @@ def hash_refresh_token(token: str) -> str:
 
 def refresh_token_expires_at() -> datetime:
     return utc_now() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
+
+def decode_access_token(token: str) -> dict[str, Any] | None:
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
+
+    if payload.get("type") != "access":
+        return None
+    return payload
