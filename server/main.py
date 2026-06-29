@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from auth.middleware import AuthMiddleware
 from database import Base, engine
 from db_migrations import ensure_document_status_columns
 from routers.auth import router as auth_router
@@ -30,6 +31,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
