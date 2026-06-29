@@ -28,6 +28,7 @@ Pygments==2.20.0
 python-dotenv==1.2.2
 python-multipart==0.0.32
 passlib[bcrypt]
+bcrypt<5
 python-jose[cryptography]
 authlib
 PyYAML==6.0.3

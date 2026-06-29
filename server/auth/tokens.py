@@ -6,10 +6,17 @@ from typing import Any
 
 from jose import JWTError, jwt
 
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-insecure-change-me")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} environment variable is required")
+    return value
+
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(required_env("ACCESS_TOKEN_EXPIRE_MINUTES"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(required_env("REFRESH_TOKEN_EXPIRE_DAYS"))
+JWT_SECRET_KEY = required_env("JWT_SECRET_KEY")
+JWT_ALGORITHM = required_env("JWT_ALGORITHM")
 
 
 def utc_now() -> datetime:

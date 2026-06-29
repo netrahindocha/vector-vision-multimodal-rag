@@ -33,7 +33,13 @@ jobs:
         run: docker build -t "$SERVER_IMAGE:test" ./server
 
       - name: Run backend unit tests
-        run: docker run --rm "$SERVER_IMAGE:test" python -m pytest -q
+        run: |
+          docker run --rm \
+            -e JWT_SECRET_KEY="ci-test-secret-not-for-production" \
+            -e ACCESS_TOKEN_EXPIRE_MINUTES="15" \
+            -e REFRESH_TOKEN_EXPIRE_DAYS="30" \
+            -e JWT_ALGORITHM="HS256" \
+            "$SERVER_IMAGE:test" python -m pytest -q
 
       - name: Build frontend image
         run: docker build -t "$CLIENT_IMAGE:test" ./client
