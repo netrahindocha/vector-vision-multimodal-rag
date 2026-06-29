@@ -6,9 +6,9 @@ import { ArrowLeft, ChevronRight, CloudUpload, Sparkles, Upload } from "lucide-r
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  buildDocumentEventsUrl,
   getDocumentChunks,
   getDocumentPartitionItems,
+  streamDocumentEvents,
   uploadDocument,
   type DocumentChunk,
   type DocumentPartitionItem,
@@ -52,12 +52,12 @@ export function UploadFilePage({
   const [isDragActive, setIsDragActive] = useState(false);
   const [activeProgressView, setActiveProgressView] = useState<"progress" | "details">("progress");
   const [activeDetailSection, setActiveDetailSection] = useState("partitioning");
-  const eventSourcesRef = useRef<EventSource[]>([]);
+  const eventControllersRef = useRef<AbortController[]>([]);
 
   useEffect(() => {
     return () => {
-      eventSourcesRef.current.forEach((eventSource) => eventSource.close());
-      eventSourcesRef.current = [];
+      eventControllersRef.current.forEach((controller) => controller.abort());
+      eventControllersRef.current = [];
     };
   }, []);
 
@@ -121,40 +121,56 @@ export function UploadFilePage({
   }
 
   function subscribeToDocumentEvents(localId: string, documentId: string) {
-    const eventSource = new EventSource(buildDocumentEventsUrl(workspace.id, documentId));
-    eventSourcesRef.current.push(eventSource);
+    const controller = new AbortController();
+    eventControllersRef.current.push(controller);
 
-    eventSource.addEventListener("document_status", (event) => {
-      const payload = JSON.parse(event.data) as DocumentStatusEvent;
+    streamDocumentEvents(
+      workspace.id,
+      documentId,
+      (payload) => {
+        setProgressItems((current) =>
+          current.map((item) => {
+            if (item.localId !== localId) return item;
 
-      setProgressItems((current) =>
-        current.map((item) => {
-          if (item.localId !== localId) return item;
+            const lastEvent = item.events[item.events.length - 1];
+            const isDuplicate =
+              lastEvent?.status === payload.status &&
+              lastEvent?.stage === payload.stage &&
+              lastEvent?.updated_at === payload.updated_at;
 
-          const lastEvent = item.events[item.events.length - 1];
-          const isDuplicate =
-            lastEvent?.status === payload.status &&
-            lastEvent?.stage === payload.stage &&
-            lastEvent?.updated_at === payload.updated_at;
+            return {
+              ...item,
+              status: payload.status,
+              stage: payload.stage,
+              errorMessage: payload.error_message,
+              updatedAt: payload.updated_at,
+              processingMetadata: payload.processing_metadata,
+              events: isDuplicate ? item.events : [...item.events, payload],
+            };
+          }),
+        );
 
-          return {
-            ...item,
-            status: payload.status,
-            stage: payload.stage,
-            errorMessage: payload.error_message,
-            updatedAt: payload.updated_at,
-            processingMetadata: payload.processing_metadata,
-            events: isDuplicate ? item.events : [...item.events, payload],
-          };
-        }),
-      );
-
-      if (payload.status === "completed" || payload.status === "failed") {
-        eventSource.close();
+        if (payload.status === "completed" || payload.status === "failed") {
+          controller.abort();
+        }
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (!controller.signal.aborted) {
+        setProgressItems((current) =>
+          current.map((item) =>
+            item.localId === localId
+              ? {
+                  ...item,
+                  status: "failed",
+                  stage: "failed",
+                  errorMessage: err instanceof Error ? err.message : "Document event stream failed",
+                }
+              : item,
+          ),
+        );
       }
     });
-
-    eventSource.onerror = () => eventSource.close();
   }
 
   function handleDrop(event: React.DragEvent<HTMLLabelElement>) {

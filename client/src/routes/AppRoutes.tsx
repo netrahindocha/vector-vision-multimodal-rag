@@ -8,8 +8,11 @@ import {
   useParams,
 } from "react-router-dom";
 
+import { useAuth } from "@/auth/AuthContext";
 import { ChatPage, type ChatTarget } from "@/pages/ChatPage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
+import { LoginPage } from "@/pages/LoginPage";
+import { RegisterPage } from "@/pages/RegisterPage";
 import { UploadFilePage } from "@/pages/UploadPage";
 import { WorkspacesPage } from "@/pages/WorkspacesPage";
 import {
@@ -24,16 +27,61 @@ function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/login" element={<PublicAuthRoute mode="login" />} />
+        <Route path="/register" element={<PublicAuthRoute mode="register" />} />
         <Route path="/" element={<Navigate to="/workspaces" replace />} />
-        <Route path="/workspaces" element={<WorkspacesRoute />} />
-        <Route path="/workspaces/:workspaceId" element={<WorkspaceRedirectRoute />} />
-        <Route path="/workspaces/:workspaceId/documents" element={<DocumentsRoute />} />
-        <Route path="/workspaces/:workspaceId/upload" element={<UploadRoute />} />
-        <Route path="/workspaces/:workspaceId/chat" element={<ChatRoute />} />
-        <Route path="/workspaces/:workspaceId/documents/:documentId/chat" element={<ChatRoute />} />
+        <Route path="/workspaces" element={<ProtectedRoute><WorkspacesRoute /></ProtectedRoute>} />
+        <Route path="/workspaces/:workspaceId" element={<ProtectedRoute><WorkspaceRedirectRoute /></ProtectedRoute>} />
+        <Route path="/workspaces/:workspaceId/documents" element={<ProtectedRoute><DocumentsRoute /></ProtectedRoute>} />
+        <Route path="/workspaces/:workspaceId/upload" element={<ProtectedRoute><UploadRoute /></ProtectedRoute>} />
+        <Route path="/workspaces/:workspaceId/chat" element={<ProtectedRoute><ChatRoute /></ProtectedRoute>} />
+        <Route path="/workspaces/:workspaceId/documents/:documentId/chat" element={<ProtectedRoute><ChatRoute /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/workspaces" replace />} />
       </Routes>
     </BrowserRouter>
+  );
+}
+
+function ProtectedRoute({ children }: { children: ReactNode }) {
+  const { isLoading, user } = useAuth();
+
+  if (isLoading) {
+    return <FullScreenLoading label="Restoring secure session..." />;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function PublicAuthRoute({ mode }: { mode: "login" | "register" }) {
+  const navigate = useNavigate();
+  const { isLoading, login, register, user } = useAuth();
+
+  if (isLoading) {
+    return <FullScreenLoading label="Checking secure session..." />;
+  }
+
+  if (user) {
+    return <Navigate to="/workspaces" replace />;
+  }
+
+  if (mode === "login") {
+    return <LoginPage onLogin={async (email, password) => { await login(email, password); navigate("/workspaces", { replace: true }); }} />;
+  }
+
+  return <RegisterPage onRegister={async (email, password, name) => { await register(email, password, name); navigate("/workspaces", { replace: true }); }} />;
+}
+
+function FullScreenLoading({ label }: { label: string }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-black text-white">
+      <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-8 text-center text-slate-300 shadow-2xl shadow-blue-950/20 backdrop-blur-xl">
+        <p className="text-lg font-semibold text-white">{label}</p>
+      </div>
+    </main>
   );
 }
 
@@ -61,6 +109,7 @@ function WorkspaceRedirectRoute() {
 
 function WorkspacesRoute() {
   const navigate = useNavigate();
+  const { logout, user } = useAuth();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,7 +187,12 @@ function WorkspacesRoute() {
         isCreating={isCreating}
         isLoading={isLoading}
         onCreateDialogOpenChange={setCreateDialogOpen}
+        currentUser={user}
         onCreateWorkspace={handleCreateWorkspace}
+        onLogout={async () => {
+          await logout();
+          navigate("/login", { replace: true });
+        }}
         onOpenWorkspace={(workspace) => {
           if (workspace.id !== "preview-workspace") {
             navigate(`/workspaces/${workspace.id}/documents`);

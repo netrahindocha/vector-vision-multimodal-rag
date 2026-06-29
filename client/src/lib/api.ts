@@ -1,5 +1,32 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
+let accessToken: string | null = null;
+
+export function setAccessToken(token: string | null) {
+  accessToken = token;
+}
+
+export function getAccessToken() {
+  return accessToken;
+}
+
+export type User = {
+  id: string;
+  email: string;
+  name: string | null;
+  avatar_url: string | null;
+  email_verified: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuthResponse = {
+  access_token: string;
+  token_type: string;
+  user: User;
+};
+
 export type Workspace = {
   id: string;
   name: string;
@@ -115,9 +142,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
+    credentials: init?.credentials ?? "include",
   });
 
   if (!response.ok) {
@@ -137,6 +169,36 @@ async function getErrorMessage(response: Response): Promise<string> {
   } catch {
     return `${response.status} ${response.statusText}`;
   }
+}
+
+export function registerUser(email: string, password: string, name?: string): Promise<AuthResponse> {
+  return requestJson<AuthResponse>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email, password, name: name || null }),
+  });
+}
+
+export function loginUser(email: string, password: string): Promise<AuthResponse> {
+  return requestJson<AuthResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function refreshSession(): Promise<AuthResponse> {
+  return requestJson<AuthResponse>("/auth/refresh", {
+    method: "POST",
+  });
+}
+
+export function getCurrentUser(): Promise<User> {
+  return requestJson<User>("/auth/me");
+}
+
+export function logoutUser(): Promise<{ status: string }> {
+  return requestJson<{ status: string }>("/auth/logout", {
+    method: "POST",
+  });
 }
 
 export function listWorkspaces(): Promise<Workspace[]> {
@@ -162,12 +224,18 @@ export async function uploadDocument(workspaceId: string, file: File): Promise<D
   const formData = new FormData();
   formData.append("file", file);
 
+  const headers: Record<string, string> = {
+    "X-Workspace-Id": workspaceId,
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(`${API_BASE_URL}/documents/upload`, {
     method: "POST",
-    headers: {
-      "X-Workspace-Id": workspaceId,
-    },
+    headers,
     body: formData,
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -271,4 +339,68 @@ export function buildDocumentEventsUrl(workspaceId: string, documentId: string):
   }
 
   return `${path}?${query}`;
+}
+
+export async function streamDocumentEvents(
+  workspaceId: string,
+  documentId: string,
+  onDocumentStatus: (event: DocumentStatusEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers = new Headers();
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  const response = await fetch(buildDocumentEventsUrl(workspaceId, documentId), {
+    headers,
+    credentials: "include",
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+  if (!response.body) {
+    throw new Error("Document event stream is not available");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const eventText of events) {
+        const parsed = parseSseEvent(eventText);
+        if (parsed.event === "document_status" && parsed.data) {
+          onDocumentStatus(JSON.parse(parsed.data) as DocumentStatusEvent);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseSseEvent(eventText: string): { event: string | null; data: string | null } {
+  let event: string | null = null;
+  const dataLines: string[] = [];
+
+  for (const line of eventText.split("\n")) {
+    if (line.startsWith("event: ")) {
+      event = line.slice("event: ".length).trim();
+    } else if (line.startsWith("data: ")) {
+      dataLines.push(line.slice("data: ".length));
+    }
+  }
+
+  return { event, data: dataLines.length ? dataLines.join("\n") : null };
 }

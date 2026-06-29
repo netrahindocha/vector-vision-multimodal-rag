@@ -17,16 +17,18 @@ import {
 import { Field, FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type Workspace } from "@/lib/api";
+import { type User, type Workspace } from "@/lib/api";
 
 export function WorkspacesPage({
   createDialogOpen,
   createError,
+  currentUser,
   error,
   isCreating,
   isLoading,
   onCreateDialogOpenChange,
   onCreateWorkspace,
+  onLogout,
   onOpenWorkspace,
   setWorkspaceDescription,
   setWorkspaceName,
@@ -36,11 +38,13 @@ export function WorkspacesPage({
 }: {
   createDialogOpen: boolean;
   createError: string | null;
+  currentUser: User | null;
   error: string | null;
   isCreating: boolean;
   isLoading: boolean;
   onCreateDialogOpenChange: (open: boolean) => void;
   onCreateWorkspace: (event: FormEvent<HTMLFormElement>) => void;
+  onLogout: () => void;
   onOpenWorkspace: (workspace: Workspace) => void;
   setWorkspaceDescription: (description: string) => void;
   setWorkspaceName: (name: string) => void;
@@ -69,7 +73,22 @@ export function WorkspacesPage({
             </p>
           </div>
         </div>
-        <CreateWorkspaceDialog
+        <div className="flex flex-col items-start gap-3 md:items-end">
+          {currentUser ? (
+            <div className="text-sm text-slate-300">
+              Signed in as <span className="text-blue-100">{currentUser.email}</span>
+            </div>
+          ) : null}
+          <div className="flex gap-3">
+            <Button
+              className="border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
+              onClick={onLogout}
+              type="button"
+              variant="outline"
+            >
+              Logout
+            </Button>
+            <CreateWorkspaceDialog
           createError={createError}
           isCreating={isCreating}
           onCreateWorkspace={onCreateWorkspace}
@@ -79,7 +98,9 @@ export function WorkspacesPage({
           setWorkspaceName={setWorkspaceName}
           workspaceDescription={workspaceDescription}
           workspaceName={workspaceName}
-        />
+            />
+          </div>
+        </div>
       </header>
 
       {error ? (
