@@ -5,7 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from auth.middleware import AuthMiddleware
+from auth.rate_limit import limiter
 from database import Base, engine
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi import _rate_limit_exceeded_handler
 from db_migrations import ensure_document_status_columns
 from routers.auth import router as auth_router
 from routers.documents import router as documents_router
@@ -31,6 +35,9 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,

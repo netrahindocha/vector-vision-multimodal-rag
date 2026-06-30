@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Response
+from starlette.requests import Request
 
 from auth.dependencies import get_current_user
 from auth.middleware import is_protected_path
@@ -76,6 +77,21 @@ class FakeDb:
         pass
 
 
+def make_request(path: str = "/auth/test") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "client": ("testclient", 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "query_string": b"",
+        }
+    )
+
+
 def make_user(*, password_hash: str | None = None, active: bool = True) -> User:
     now = datetime.now(UTC)
     return User(
@@ -95,7 +111,12 @@ def test_register_creates_user_hashes_password_sets_cookie_and_returns_token():
     response = Response()
     payload = RegisterRequest(email="USER@example.com", password="password123", name="User")
 
-    result = auth_router.register(payload, response=response, db=db)
+    result = auth_router.register.__wrapped__(
+        request=make_request("/auth/register"),
+        payload=payload,
+        response=response,
+        db=db,
+    )
 
     assert result.access_token
     assert result.token_type == "bearer"
@@ -113,8 +134,9 @@ def test_register_rejects_duplicate_email():
     existing_user = make_user()
 
     with pytest.raises(HTTPException) as exc_info:
-        auth_router.register(
-            RegisterRequest(email="user@example.com", password="password123", name=None),
+        auth_router.register.__wrapped__(
+            request=make_request("/auth/register"),
+            payload=RegisterRequest(email="user@example.com", password="password123", name=None),
             response=Response(),
             db=FakeDb(scalar_result=existing_user),
         )
@@ -128,8 +150,9 @@ def test_login_accepts_valid_credentials_and_sets_refresh_cookie():
     db = FakeDb(scalar_result=user, user=user)
     response = Response()
 
-    result = auth_router.login(
-        LoginRequest(email="USER@example.com", password="password123"),
+    result = auth_router.login.__wrapped__(
+        request=make_request("/auth/login"),
+        payload=LoginRequest(email="USER@example.com", password="password123"),
         response=response,
         db=db,
     )
@@ -144,8 +167,9 @@ def test_login_rejects_invalid_password():
     user = make_user(password_hash=auth_router.hash_password("password123"))
 
     with pytest.raises(HTTPException) as exc_info:
-        auth_router.login(
-            LoginRequest(email="user@example.com", password="wrong-password"),
+        auth_router.login.__wrapped__(
+            request=make_request("/auth/login"),
+            payload=LoginRequest(email="user@example.com", password="wrong-password"),
             response=Response(),
             db=FakeDb(scalar_result=user, user=user),
         )

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from auth.cookies import (
 )
 from auth.dependencies import get_current_user
 from auth.password import hash_password, verify_password
+from auth.rate_limit import RATE_LIMIT_GOOGLE_LOGIN, RATE_LIMIT_LOGIN, RATE_LIMIT_REGISTER, limiter
 from auth.tokens import (
     create_access_token,
     generate_refresh_token,
@@ -227,7 +228,9 @@ def get_or_create_google_user(userinfo: dict, db: Session) -> User:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_LIMIT_REGISTER)
 def register(
+    request: Request,
     payload: RegisterRequest,
     response: Response,
     db: Session = Depends(get_db),
@@ -255,7 +258,9 @@ def register(
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit(RATE_LIMIT_LOGIN)
 def login(
+    request: Request,
     payload: LoginRequest,
     response: Response,
     db: Session = Depends(get_db),
@@ -275,7 +280,8 @@ def login(
 
 
 @router.get("/google/login")
-def google_login():
+@limiter.limit(RATE_LIMIT_GOOGLE_LOGIN)
+def google_login(request: Request):
     settings = get_google_oauth_settings()
     state = secrets.token_urlsafe(32)
     response = RedirectResponse(build_google_authorization_url(state, settings))

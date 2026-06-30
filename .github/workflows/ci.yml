@@ -39,6 +39,10 @@ jobs:
             -e ACCESS_TOKEN_EXPIRE_MINUTES="15" \
             -e REFRESH_TOKEN_EXPIRE_DAYS="30" \
             -e JWT_ALGORITHM="HS256" \
+            -e RATE_LIMIT_STORAGE_URL="memory://" \
+            -e RATE_LIMIT_LOGIN="5/minute" \
+            -e RATE_LIMIT_REGISTER="3/minute" \
+            -e RATE_LIMIT_GOOGLE_LOGIN="10/minute" \
             "$SERVER_IMAGE:test" sh -c 'export JWT_SECRET_KEY="$(python -c "import secrets; print(secrets.token_urlsafe(64))")" && python -m pytest -q'
 
       - name: Build frontend image
