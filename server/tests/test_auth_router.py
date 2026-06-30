@@ -9,16 +9,17 @@ from auth.dependencies import get_current_user
 from auth.middleware import is_protected_path
 from auth.password import verify_password
 from auth.tokens import create_access_token, generate_refresh_token, hash_refresh_token
-from models import RefreshToken, User
+from models import OAuthAccount, RefreshToken, User
 from routers import auth as auth_router
 from schemas import LoginRequest, RegisterRequest
 
 
 class FakeDb:
-    def __init__(self, *, scalar_result=None, user=None, refresh_token_row=None):
+    def __init__(self, *, scalar_result=None, user=None, refresh_token_row=None, oauth_account=None):
         self.scalar_result = scalar_result
         self.user = user
         self.refresh_token_row = refresh_token_row
+        self.oauth_account = oauth_account
         self.added = []
         self.committed = False
         self.flushed = False
@@ -28,6 +29,10 @@ class FakeDb:
         entity = statement.column_descriptions[0].get("entity")
         if entity is RefreshToken and self.refresh_token_row is not None:
             return self.refresh_token_row
+        if entity is OAuthAccount:
+            return self.oauth_account
+        if entity is User and self.user is not None:
+            return self.user
         return self.scalar_result
 
     def get(self, model, object_id):
@@ -41,6 +46,8 @@ class FakeDb:
             self.user = obj
         if isinstance(obj, RefreshToken):
             self.refresh_token_row = obj
+        if isinstance(obj, OAuthAccount):
+            self.oauth_account = obj
 
     def flush(self):
         self.flushed = True
@@ -64,6 +71,9 @@ class FakeDb:
             now = datetime.now(UTC)
             obj.created_at = obj.created_at or now
             obj.updated_at = obj.updated_at or now
+
+    def rollback(self):
+        pass
 
 
 def make_user(*, password_hash: str | None = None, active: bool = True) -> User:
@@ -214,6 +224,82 @@ def test_logout_revokes_refresh_token_and_clears_cookie():
     assert token_row.revoked_at is not None
     assert db.committed is True
     assert "refresh_token=" in response.headers.get("set-cookie", "")
+
+
+def test_get_or_create_google_user_creates_user_and_oauth_link_for_new_verified_email():
+    db = FakeDb()
+    userinfo = {
+        "sub": "google-sub-1",
+        "email": "GOOGLE@example.com",
+        "email_verified": True,
+        "name": "Google User",
+        "picture": "https://example.com/avatar.png",
+    }
+
+    user = auth_router.get_or_create_google_user(userinfo, db)
+
+    assert user.email == "google@example.com"
+    assert user.email_verified is True
+    assert user.password_hash is None
+    assert user.name == "Google User"
+    assert user.avatar_url == "https://example.com/avatar.png"
+    oauth_account = next(item for item in db.added if isinstance(item, OAuthAccount))
+    assert oauth_account.user_id == user.id
+    assert oauth_account.provider == "google"
+    assert oauth_account.provider_account_id == "google-sub-1"
+
+
+def test_get_or_create_google_user_links_existing_verified_email():
+    existing_user = make_user()
+    db = FakeDb(user=existing_user)
+    userinfo = {
+        "sub": "google-sub-2",
+        "email": existing_user.email,
+        "email_verified": True,
+        "name": "Existing Google User",
+    }
+
+    user = auth_router.get_or_create_google_user(userinfo, db)
+
+    assert user is existing_user
+    assert user.email_verified is True
+    oauth_account = next(item for item in db.added if isinstance(item, OAuthAccount))
+    assert oauth_account.user_id == existing_user.id
+    assert oauth_account.provider_account_id == "google-sub-2"
+
+
+def test_get_or_create_google_user_rejects_unverified_email_link():
+    existing_user = make_user()
+    db = FakeDb(user=existing_user)
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_router.get_or_create_google_user(
+            {
+                "sub": "google-sub-3",
+                "email": existing_user.email,
+                "email_verified": False,
+            },
+            db,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_build_google_authorization_url_contains_required_parameters():
+    url = auth_router.build_google_authorization_url(
+        "state-123",
+        {
+            "client_id": "client-id",
+            "client_secret": "secret",
+            "redirect_uri": "http://localhost:8000/auth/google/callback",
+            "frontend_redirect_url": "http://localhost:3000/auth/callback",
+        },
+    )
+
+    assert url.startswith(auth_router.GOOGLE_AUTHORIZATION_URL)
+    assert "client_id=client-id" in url
+    assert "state=state-123" in url
+    assert "scope=openid+email+profile" in url
 
 
 def test_middleware_path_matching_protects_expected_routes_and_skips_public_routes():

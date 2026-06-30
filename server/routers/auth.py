@@ -1,10 +1,17 @@
-from datetime import UTC, datetime
+import os
+import secrets
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+import httpx
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from auth.cookies import (
+    AUTH_COOKIE_SAMESITE,
+    AUTH_COOKIE_SECURE,
     REFRESH_TOKEN_COOKIE_NAME,
     clear_refresh_token_cookie,
     set_refresh_token_cookie,
@@ -18,12 +25,18 @@ from auth.tokens import (
     refresh_token_expires_at,
 )
 from database import get_db
-from models import RefreshToken, User
+from models import OAuthAccount, RefreshToken, User
 from schemas import LoginRequest, RegisterRequest, TokenResponse, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 INVALID_CREDENTIALS_MESSAGE = "Invalid email or password"
+GOOGLE_PROVIDER = "google"
+GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+GOOGLE_OAUTH_STATE_COOKIE_NAME = "google_oauth_state"
+GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS = int(timedelta(minutes=5).total_seconds())
 
 
 def normalize_email(email: str) -> str:
@@ -80,6 +93,139 @@ def get_active_refresh_token_row(
     return token_row
 
 
+def required_oauth_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise HTTPException(status_code=500, detail=f"{name} environment variable is required")
+    return value
+
+
+def get_google_oauth_settings() -> dict[str, str]:
+    return {
+        "client_id": required_oauth_env("GOOGLE_CLIENT_ID"),
+        "client_secret": required_oauth_env("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": required_oauth_env("GOOGLE_REDIRECT_URI"),
+        "frontend_redirect_url": required_oauth_env("FRONTEND_AUTH_REDIRECT_URL"),
+    }
+
+
+def build_google_authorization_url(state: str, settings: dict[str, str]) -> str:
+    query = urlencode(
+        {
+            "client_id": settings["client_id"],
+            "redirect_uri": settings["redirect_uri"],
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "offline",
+            "prompt": "select_account",
+        }
+    )
+    return f"{GOOGLE_AUTHORIZATION_URL}?{query}"
+
+
+def set_google_oauth_state_cookie(response: Response, state: str) -> None:
+    response.set_cookie(
+        key=GOOGLE_OAUTH_STATE_COOKIE_NAME,
+        value=state,
+        max_age=GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        path="/auth/google/callback",
+    )
+
+
+def clear_google_oauth_state_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=GOOGLE_OAUTH_STATE_COOKIE_NAME,
+        path="/auth/google/callback",
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+    )
+
+
+def exchange_google_code_for_userinfo(code: str, settings: dict[str, str]) -> dict:
+    with httpx.Client(timeout=15) as client:
+        token_response = client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings["client_id"],
+                "client_secret": settings["client_secret"],
+                "redirect_uri": settings["redirect_uri"],
+                "grant_type": "authorization_code",
+            },
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        access_token = token_payload.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Google OAuth token exchange failed")
+
+        userinfo_response = client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        userinfo_response.raise_for_status()
+        return userinfo_response.json()
+
+
+def get_or_create_google_user(userinfo: dict, db: Session) -> User:
+    provider_account_id = userinfo.get("sub")
+    email = userinfo.get("email")
+    email_verified = bool(userinfo.get("email_verified"))
+    if not provider_account_id or not email:
+        raise HTTPException(status_code=400, detail="Google account did not provide required profile data")
+
+    oauth_account = db.scalar(
+        select(OAuthAccount).where(
+            OAuthAccount.provider == GOOGLE_PROVIDER,
+            OAuthAccount.provider_account_id == provider_account_id,
+        )
+    )
+    if oauth_account is not None:
+        user = db.get(User, oauth_account.user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=401, detail="Google account is not active")
+        return user
+
+    normalized_email = normalize_email(email)
+    user = db.scalar(select(User).where(User.email == normalized_email))
+    if user is None:
+        user = User(
+            email=normalized_email,
+            name=userinfo.get("name"),
+            avatar_url=userinfo.get("picture"),
+            password_hash=None,
+            email_verified=email_verified,
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+    elif not email_verified:
+        raise HTTPException(status_code=400, detail="Google email must be verified to link accounts")
+    elif not user.is_active:
+        raise HTTPException(status_code=401, detail="User account is not active")
+
+    if email_verified and not user.email_verified:
+        user.email_verified = True
+    if user.avatar_url is None and userinfo.get("picture"):
+        user.avatar_url = userinfo.get("picture")
+    if user.name is None and userinfo.get("name"):
+        user.name = userinfo.get("name")
+
+    db.add(
+        OAuthAccount(
+            user_id=user.id,
+            provider=GOOGLE_PROVIDER,
+            provider_account_id=provider_account_id,
+            provider_email=normalized_email,
+        )
+    )
+    return user
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(
     payload: RegisterRequest,
@@ -126,6 +272,44 @@ def login(
     db.commit()
 
     return issue_token_response(user, refresh_token, response)
+
+
+@router.get("/google/login")
+def google_login():
+    settings = get_google_oauth_settings()
+    state = secrets.token_urlsafe(32)
+    response = RedirectResponse(build_google_authorization_url(state, settings))
+    set_google_oauth_state_cookie(response, state)
+    return response
+
+
+@router.get("/google/callback")
+def google_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    stored_state: str | None = Cookie(default=None, alias=GOOGLE_OAUTH_STATE_COOKIE_NAME),
+    db: Session = Depends(get_db),
+):
+    settings = get_google_oauth_settings()
+    redirect_response = RedirectResponse(settings["frontend_redirect_url"])
+    clear_google_oauth_state_cookie(redirect_response)
+
+    if not code or not state or not stored_state or not secrets.compare_digest(state, stored_state):
+        redirect_response.headers["Location"] = f"{settings['frontend_redirect_url']}?error=oauth_state"
+        return redirect_response
+
+    try:
+        userinfo = exchange_google_code_for_userinfo(code, settings)
+        user = get_or_create_google_user(userinfo, db)
+        refresh_token = create_refresh_token_session(user, db)
+        db.commit()
+        db.refresh(user)
+        set_refresh_token_cookie(redirect_response, refresh_token)
+        return redirect_response
+    except Exception:
+        db.rollback()
+        redirect_response.headers["Location"] = f"{settings['frontend_redirect_url']}?error=oauth_failed"
+        return redirect_response
 
 
 @router.get("/me", response_model=UserRead)
