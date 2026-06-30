@@ -1,11 +1,12 @@
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
-import { LockKeyhole, Sparkles } from "lucide-react";
+import { LockKeyhole, Search, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildGoogleLoginUrl } from "@/lib/api";
 
 export function LoginPage({ onLogin }: { onLogin: (email: string, password: string) => Promise<void> }) {
   const [email, setEmail] = useState("");
@@ -49,6 +50,20 @@ export function LoginPage({ onLogin }: { onLogin: (email: string, password: stri
           {error ? <div className="rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{error}</div> : null}
           <Button className="w-full bg-blue-500 text-white shadow-[0_0_35px_rgba(59,130,246,0.4)] hover:bg-blue-400" disabled={isSubmitting || !email.trim() || !password} type="submit">
             {isSubmitting ? "Logging in..." : "Log in"}
+          </Button>
+          <div className="flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-slate-500">
+            <div className="h-px flex-1 bg-white/10" />
+            or
+            <div className="h-px flex-1 bg-white/10" />
+          </div>
+          <Button
+            className="w-full border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
+            onClick={() => window.location.assign(buildGoogleLoginUrl())}
+            type="button"
+            variant="outline"
+          >
+            <Search className="mr-2 h-4 w-4" />
+            Continue with Google
           </Button>
           <p className="text-center text-sm text-slate-400">
             New here? <Link className="text-blue-100 underline underline-offset-4 hover:text-white" to="/register">Create an account</Link>

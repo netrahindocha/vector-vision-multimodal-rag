@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import {
   loginUser,
@@ -15,6 +15,7 @@ type AuthContextValue = {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
+  restoreSession: () => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -25,16 +26,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  function applySession(nextToken: string | null, nextUser: User | null) {
+  const applySession = useCallback((nextToken: string | null, nextUser: User | null) => {
     setToken(nextToken);
     setUser(nextUser);
     setAccessToken(nextToken);
-  }
+  }, []);
+
+  const restoreSession = useCallback(async () => {
+    const session = await refreshSession();
+    applySession(session.access_token, session.user);
+  }, [applySession]);
 
   useEffect(() => {
     let ignore = false;
 
-    async function restoreSession() {
+    async function restoreInitialSession() {
       try {
         const session = await refreshSession();
         if (!ignore) applySession(session.access_token, session.user);
@@ -45,11 +51,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    restoreSession();
+    restoreInitialSession();
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [applySession]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -64,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const session = await registerUser(email, password, name);
         applySession(session.access_token, session.user);
       },
+      restoreSession,
       async logout() {
         try {
           await logoutUser();
@@ -72,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [isLoading, token, user],
+    [isLoading, restoreSession, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

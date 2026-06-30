@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthContext";
+import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
 import { ChatPage, type ChatTarget } from "@/pages/ChatPage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -27,6 +28,7 @@ function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/auth/callback" element={<AuthCallbackRoute />} />
         <Route path="/login" element={<PublicAuthRoute mode="login" />} />
         <Route path="/register" element={<PublicAuthRoute mode="register" />} />
         <Route path="/" element={<Navigate to="/workspaces" replace />} />
@@ -54,6 +56,11 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   }
 
   return <>{children}</>;
+}
+
+function AuthCallbackRoute() {
+  const { restoreSession } = useAuth();
+  return <AuthCallbackPage onRestoreSession={restoreSession} />;
 }
 
 function PublicAuthRoute({ mode }: { mode: "login" | "register" }) {

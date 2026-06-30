@@ -201,6 +201,10 @@ export function logoutUser(): Promise<{ status: string }> {
   });
 }
 
+export function buildGoogleLoginUrl(): string {
+  return `${API_BASE_URL}/auth/google/login`;
+}
+
 export function listWorkspaces(): Promise<Workspace[]> {
   return requestJson<Workspace[]>("/workspaces");
 }
