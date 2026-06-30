@@ -1,10 +1,8 @@
 services:
   postgres:
     image: postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
-    environment:
-      POSTGRES_DB: rag_app
-      POSTGRES_USER: rag_user
-      POSTGRES_PASSWORD: rag_password
+    env_file:
+      ./server/.env
     ports:
       - "5432:5432"
     volumes:
@@ -41,7 +39,6 @@ services:
     env_file:
       ./server/.env
     environment:
-      DATABASE_URL: postgresql+psycopg://rag_user:rag_password@postgres:5432/rag_app
       PYTHONUNBUFFERED: "1"
       DO_NOT_TRACK: "true"
       CHROMA_HOST: chroma
@@ -67,7 +64,6 @@ services:
     env_file:
       ./server/.env
     environment:
-      DATABASE_URL: postgresql+psycopg://rag_user:rag_password@postgres:5432/rag_app
       PYTHONUNBUFFERED: "1"
       DO_NOT_TRACK: "true"
       CHROMA_HOST: chroma

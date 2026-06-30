@@ -35,11 +35,11 @@ jobs:
       - name: Run backend unit tests
         run: |
           docker run --rm \
-            -e JWT_SECRET_KEY="ci-test-secret-not-for-production" \
+            -e DATABASE_URL="sqlite+pysqlite:///:memory:" \
             -e ACCESS_TOKEN_EXPIRE_MINUTES="15" \
             -e REFRESH_TOKEN_EXPIRE_DAYS="30" \
             -e JWT_ALGORITHM="HS256" \
-            "$SERVER_IMAGE:test" python -m pytest -q
+            "$SERVER_IMAGE:test" sh -c 'export JWT_SECRET_KEY="$(python -c "import secrets; print(secrets.token_urlsafe(64))")" && python -m pytest -q'
 
       - name: Build frontend image
         run: docker build -t "$CLIENT_IMAGE:test" ./client
