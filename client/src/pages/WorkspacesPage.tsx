@@ -118,6 +118,18 @@ export function WorkspacesPage({
             />
           ))}
         </div>
+      ) : visibleWorkspaces.length === 0 ? (
+        <Card className="relative overflow-hidden border-white/10 bg-slate-950/70 text-white shadow-2xl shadow-blue-950/30 backdrop-blur-xl">
+          <div className="absolute right-10 top-0 h-28 w-28 rounded-full bg-cyan-300/20 blur-3xl" />
+          <CardHeader className="relative z-10">
+            <CardTitle className="text-2xl text-white">
+              No workspaces yet
+            </CardTitle>
+            <CardDescription className="max-w-xl text-slate-300">
+              Go ahead and create one to start uploading documents, building embeddings, and chatting with your private knowledge base.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       ) : (
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {visibleWorkspaces.map((workspace, index) => (

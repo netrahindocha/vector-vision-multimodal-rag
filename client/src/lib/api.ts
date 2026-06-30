@@ -205,6 +205,10 @@ export function buildGoogleLoginUrl(): string {
   return `${API_BASE_URL}/auth/google/login`;
 }
 
+export function buildMicrosoftLoginUrl(): string {
+  return `${API_BASE_URL}/auth/microsoft/login`;
+}
+
 export function listWorkspaces(): Promise<Workspace[]> {
   return requestJson<Workspace[]>("/workspaces");
 }

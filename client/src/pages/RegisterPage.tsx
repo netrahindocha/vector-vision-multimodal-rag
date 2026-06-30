@@ -1,13 +1,13 @@
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
-import { Search, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildGoogleLoginUrl } from "@/lib/api";
-import { AuthPageShell } from "@/pages/LoginPage";
+import { buildGoogleLoginUrl, buildMicrosoftLoginUrl } from "@/lib/api";
+import { AuthPageShell, GoogleIcon, MicrosoftIcon } from "@/pages/LoginPage";
 
 export function RegisterPage({ onRegister }: { onRegister: (email: string, password: string, name?: string) => Promise<void> }) {
   const [name, setName] = useState("");
@@ -31,7 +31,7 @@ export function RegisterPage({ onRegister }: { onRegister: (email: string, passw
 
   return (
     <AuthPageShell>
-      <Card className="relative w-full max-w-md overflow-hidden border-blue-300/20 bg-slate-950/75 text-white shadow-2xl shadow-blue-950/40 backdrop-blur-xl">
+      <Card className="relative mx-auto w-full max-w-md overflow-hidden border-blue-300/20 bg-slate-950/75 text-white shadow-2xl shadow-blue-950/40 backdrop-blur-xl">
         <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-blue-500/25 blur-3xl" />
         <CardHeader className="relative z-10 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-blue-300/25 bg-blue-400/10 text-blue-100 shadow-[0_0_35px_rgba(59,130,246,0.35)]">
@@ -62,15 +62,26 @@ export function RegisterPage({ onRegister }: { onRegister: (email: string, passw
             or
             <div className="h-px flex-1 bg-white/10" />
           </div>
-          <Button
-            className="w-full border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
-            onClick={() => window.location.assign(buildGoogleLoginUrl())}
-            type="button"
-            variant="outline"
-          >
-            <Search className="mr-2 h-4 w-4" />
-            Continue with Google
-          </Button>
+          <div className="space-y-3">
+            <Button
+              className="w-full border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
+              onClick={() => window.location.assign(buildGoogleLoginUrl())}
+              type="button"
+              variant="outline"
+            >
+              <GoogleIcon className="mr-2 h-4 w-4" />
+              Sign up with Google
+            </Button>
+            <Button
+              className="w-full border-white/15 bg-white/5 text-slate-100 hover:bg-white/10 hover:text-white"
+              onClick={() => window.location.assign(buildMicrosoftLoginUrl())}
+              type="button"
+              variant="outline"
+            >
+              <MicrosoftIcon className="mr-2 h-4 w-4" />
+              Sign up with Microsoft
+            </Button>
+          </div>
           <p className="text-center text-sm text-slate-400">
             Already have an account? <Link className="text-blue-100 underline underline-offset-4 hover:text-white" to="/login">Log in</Link>
           </p>

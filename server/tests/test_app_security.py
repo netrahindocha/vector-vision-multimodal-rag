@@ -6,6 +6,11 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-not-used-for-production")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "15")
 os.environ.setdefault("REFRESH_TOKEN_EXPIRE_DAYS", "30")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
+os.environ.setdefault("RATE_LIMIT_STORAGE_URL", "memory://")
+os.environ.setdefault("RATE_LIMIT_LOGIN", "5/minute")
+os.environ.setdefault("RATE_LIMIT_REGISTER", "3/minute")
+os.environ.setdefault("RATE_LIMIT_GOOGLE_LOGIN", "10/minute")
+os.environ.setdefault("RATE_LIMIT_MICROSOFT_LOGIN", "10/minute")
 
 from fastapi.testclient import TestClient
 

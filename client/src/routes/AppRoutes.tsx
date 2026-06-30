@@ -173,17 +173,8 @@ function WorkspacesRoute() {
 
   const visibleWorkspaces = useMemo(() => {
     if (workspaces.length > 0) return workspaces;
-    if (isLoading || error) return [];
-    return [
-      {
-        id: "preview-workspace",
-        name: "No workspaces yet",
-        description: "Your workspaces will appear here once you create them.",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    ];
-  }, [error, isLoading, workspaces]);
+    return [];
+  }, [workspaces]);
 
   return (
     <AppShell>
@@ -201,9 +192,7 @@ function WorkspacesRoute() {
           navigate("/login", { replace: true });
         }}
         onOpenWorkspace={(workspace) => {
-          if (workspace.id !== "preview-workspace") {
-            navigate(`/workspaces/${workspace.id}/documents`);
-          }
+          navigate(`/workspaces/${workspace.id}/documents`);
         }}
         setWorkspaceDescription={setWorkspaceDescription}
         setWorkspaceName={setWorkspaceName}

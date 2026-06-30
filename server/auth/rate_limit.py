@@ -15,6 +15,7 @@ RATE_LIMIT_STORAGE_URL = required_env("RATE_LIMIT_STORAGE_URL")
 RATE_LIMIT_LOGIN = required_env("RATE_LIMIT_LOGIN")
 RATE_LIMIT_REGISTER = required_env("RATE_LIMIT_REGISTER")
 RATE_LIMIT_GOOGLE_LOGIN = required_env("RATE_LIMIT_GOOGLE_LOGIN")
+RATE_LIMIT_MICROSOFT_LOGIN = required_env("RATE_LIMIT_MICROSOFT_LOGIN")
 
 limiter = Limiter(
     key_func=get_remote_address,

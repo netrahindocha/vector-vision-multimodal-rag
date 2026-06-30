@@ -309,6 +309,41 @@ def test_get_or_create_google_user_rejects_unverified_email_link():
     assert exc_info.value.status_code == 400
 
 
+def test_get_or_create_microsoft_user_creates_user_and_oauth_link():
+    db = FakeDb()
+    userinfo = {
+        "id": "microsoft-id-1",
+        "mail": "MICROSOFT@example.com",
+        "displayName": "Microsoft User",
+    }
+
+    user = auth_router.get_or_create_microsoft_user(userinfo, db)
+
+    assert user.email == "microsoft@example.com"
+    assert user.email_verified is True
+    assert user.password_hash is None
+    assert user.name == "Microsoft User"
+    oauth_account = next(item for item in db.added if isinstance(item, OAuthAccount))
+    assert oauth_account.user_id == user.id
+    assert oauth_account.provider == "microsoft"
+    assert oauth_account.provider_account_id == "microsoft-id-1"
+
+
+def test_get_or_create_microsoft_user_uses_user_principal_name_fallback():
+    db = FakeDb()
+    userinfo = {
+        "id": "microsoft-id-2",
+        "userPrincipalName": "UPN@example.com",
+        "displayName": "UPN User",
+    }
+
+    user = auth_router.get_or_create_microsoft_user(userinfo, db)
+
+    assert user.email == "upn@example.com"
+    oauth_account = next(item for item in db.added if isinstance(item, OAuthAccount))
+    assert oauth_account.provider_account_id == "microsoft-id-2"
+
+
 def test_build_google_authorization_url_contains_required_parameters():
     url = auth_router.build_google_authorization_url(
         "state-123",
@@ -324,6 +359,24 @@ def test_build_google_authorization_url_contains_required_parameters():
     assert "client_id=client-id" in url
     assert "state=state-123" in url
     assert "scope=openid+email+profile" in url
+
+
+def test_build_microsoft_authorization_url_contains_required_parameters():
+    url = auth_router.build_microsoft_authorization_url(
+        "state-123",
+        {
+            "client_id": "client-id",
+            "client_secret": "secret",
+            "tenant_id": "common",
+            "redirect_uri": "http://localhost:8000/auth/microsoft/callback",
+            "frontend_redirect_url": "http://localhost:3000/auth/callback",
+        },
+    )
+
+    assert url.startswith("https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
+    assert "client_id=client-id" in url
+    assert "state=state-123" in url
+    assert "scope=openid+email+profile+User.Read" in url
 
 
 def test_middleware_path_matching_protects_expected_routes_and_skips_public_routes():

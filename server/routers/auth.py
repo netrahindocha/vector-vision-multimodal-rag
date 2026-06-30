@@ -18,7 +18,13 @@ from auth.cookies import (
 )
 from auth.dependencies import get_current_user
 from auth.password import hash_password, verify_password
-from auth.rate_limit import RATE_LIMIT_GOOGLE_LOGIN, RATE_LIMIT_LOGIN, RATE_LIMIT_REGISTER, limiter
+from auth.rate_limit import (
+    RATE_LIMIT_GOOGLE_LOGIN,
+    RATE_LIMIT_LOGIN,
+    RATE_LIMIT_MICROSOFT_LOGIN,
+    RATE_LIMIT_REGISTER,
+    limiter,
+)
 from auth.tokens import (
     create_access_token,
     generate_refresh_token,
@@ -38,6 +44,11 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_OAUTH_STATE_COOKIE_NAME = "google_oauth_state"
 GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS = int(timedelta(minutes=5).total_seconds())
+MICROSOFT_PROVIDER = "microsoft"
+MICROSOFT_AUTHORITY_BASE_URL = "https://login.microsoftonline.com"
+MICROSOFT_GRAPH_ME_URL = "https://graph.microsoft.com/v1.0/me"
+MICROSOFT_OAUTH_STATE_COOKIE_NAME = "microsoft_oauth_state"
+MICROSOFT_OAUTH_STATE_MAX_AGE_SECONDS = int(timedelta(minutes=5).total_seconds())
 
 
 def normalize_email(email: str) -> str:
@@ -110,6 +121,16 @@ def get_google_oauth_settings() -> dict[str, str]:
     }
 
 
+def get_microsoft_oauth_settings() -> dict[str, str]:
+    return {
+        "client_id": required_oauth_env("MICROSOFT_CLIENT_ID"),
+        "client_secret": required_oauth_env("MICROSOFT_CLIENT_SECRET"),
+        "tenant_id": os.getenv("MICROSOFT_TENANT_ID", "common"),
+        "redirect_uri": required_oauth_env("MICROSOFT_REDIRECT_URI"),
+        "frontend_redirect_url": required_oauth_env("FRONTEND_AUTH_REDIRECT_URL"),
+    }
+
+
 def build_google_authorization_url(state: str, settings: dict[str, str]) -> str:
     query = urlencode(
         {
@@ -123,6 +144,22 @@ def build_google_authorization_url(state: str, settings: dict[str, str]) -> str:
         }
     )
     return f"{GOOGLE_AUTHORIZATION_URL}?{query}"
+
+
+def build_microsoft_authorization_url(state: str, settings: dict[str, str]) -> str:
+    query = urlencode(
+        {
+            "client_id": settings["client_id"],
+            "redirect_uri": settings["redirect_uri"],
+            "response_type": "code",
+            "scope": "openid email profile User.Read",
+            "state": state,
+            "response_mode": "query",
+            "prompt": "select_account",
+        }
+    )
+    tenant_id = settings["tenant_id"]
+    return f"{MICROSOFT_AUTHORITY_BASE_URL}/{tenant_id}/oauth2/v2.0/authorize?{query}"
 
 
 def set_google_oauth_state_cookie(response: Response, state: str) -> None:
@@ -141,6 +178,27 @@ def clear_google_oauth_state_cookie(response: Response) -> None:
     response.delete_cookie(
         key=GOOGLE_OAUTH_STATE_COOKIE_NAME,
         path="/auth/google/callback",
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+    )
+
+
+def set_microsoft_oauth_state_cookie(response: Response, state: str) -> None:
+    response.set_cookie(
+        key=MICROSOFT_OAUTH_STATE_COOKIE_NAME,
+        value=state,
+        max_age=MICROSOFT_OAUTH_STATE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        path="/auth/microsoft/callback",
+    )
+
+
+def clear_microsoft_oauth_state_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=MICROSOFT_OAUTH_STATE_COOKIE_NAME,
+        path="/auth/microsoft/callback",
         secure=AUTH_COOKIE_SECURE,
         samesite=AUTH_COOKIE_SAMESITE,
     )
@@ -166,6 +224,34 @@ def exchange_google_code_for_userinfo(code: str, settings: dict[str, str]) -> di
 
         userinfo_response = client.get(
             GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        userinfo_response.raise_for_status()
+        return userinfo_response.json()
+
+
+def exchange_microsoft_code_for_userinfo(code: str, settings: dict[str, str]) -> dict:
+    tenant_id = settings["tenant_id"]
+    token_url = f"{MICROSOFT_AUTHORITY_BASE_URL}/{tenant_id}/oauth2/v2.0/token"
+    with httpx.Client(timeout=15) as client:
+        token_response = client.post(
+            token_url,
+            data={
+                "code": code,
+                "client_id": settings["client_id"],
+                "client_secret": settings["client_secret"],
+                "redirect_uri": settings["redirect_uri"],
+                "grant_type": "authorization_code",
+            },
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        access_token = token_payload.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Microsoft OAuth token exchange failed")
+
+        userinfo_response = client.get(
+            MICROSOFT_GRAPH_ME_URL,
             headers={"Authorization": f"Bearer {access_token}"},
         )
         userinfo_response.raise_for_status()
@@ -220,6 +306,56 @@ def get_or_create_google_user(userinfo: dict, db: Session) -> User:
         OAuthAccount(
             user_id=user.id,
             provider=GOOGLE_PROVIDER,
+            provider_account_id=provider_account_id,
+            provider_email=normalized_email,
+        )
+    )
+    return user
+
+
+def get_or_create_microsoft_user(userinfo: dict, db: Session) -> User:
+    provider_account_id = userinfo.get("id")
+    email = userinfo.get("mail") or userinfo.get("userPrincipalName")
+    if not provider_account_id or not email:
+        raise HTTPException(status_code=400, detail="Microsoft account did not provide required profile data")
+
+    oauth_account = db.scalar(
+        select(OAuthAccount).where(
+            OAuthAccount.provider == MICROSOFT_PROVIDER,
+            OAuthAccount.provider_account_id == provider_account_id,
+        )
+    )
+    if oauth_account is not None:
+        user = db.get(User, oauth_account.user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=401, detail="Microsoft account is not active")
+        return user
+
+    normalized_email = normalize_email(email)
+    user = db.scalar(select(User).where(User.email == normalized_email))
+    if user is None:
+        user = User(
+            email=normalized_email,
+            name=userinfo.get("displayName"),
+            avatar_url=None,
+            password_hash=None,
+            email_verified=True,
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+    elif not user.is_active:
+        raise HTTPException(status_code=401, detail="User account is not active")
+
+    if not user.email_verified:
+        user.email_verified = True
+    if user.name is None and userinfo.get("displayName"):
+        user.name = userinfo.get("displayName")
+
+    db.add(
+        OAuthAccount(
+            user_id=user.id,
+            provider=MICROSOFT_PROVIDER,
             provider_account_id=provider_account_id,
             provider_email=normalized_email,
         )
@@ -307,6 +443,45 @@ def google_callback(
     try:
         userinfo = exchange_google_code_for_userinfo(code, settings)
         user = get_or_create_google_user(userinfo, db)
+        refresh_token = create_refresh_token_session(user, db)
+        db.commit()
+        db.refresh(user)
+        set_refresh_token_cookie(redirect_response, refresh_token)
+        return redirect_response
+    except Exception:
+        db.rollback()
+        redirect_response.headers["Location"] = f"{settings['frontend_redirect_url']}?error=oauth_failed"
+        return redirect_response
+
+
+@router.get("/microsoft/login")
+@limiter.limit(RATE_LIMIT_MICROSOFT_LOGIN)
+def microsoft_login(request: Request):
+    settings = get_microsoft_oauth_settings()
+    state = secrets.token_urlsafe(32)
+    response = RedirectResponse(build_microsoft_authorization_url(state, settings))
+    set_microsoft_oauth_state_cookie(response, state)
+    return response
+
+
+@router.get("/microsoft/callback")
+def microsoft_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    stored_state: str | None = Cookie(default=None, alias=MICROSOFT_OAUTH_STATE_COOKIE_NAME),
+    db: Session = Depends(get_db),
+):
+    settings = get_microsoft_oauth_settings()
+    redirect_response = RedirectResponse(settings["frontend_redirect_url"])
+    clear_microsoft_oauth_state_cookie(redirect_response)
+
+    if not code or not state or not stored_state or not secrets.compare_digest(state, stored_state):
+        redirect_response.headers["Location"] = f"{settings['frontend_redirect_url']}?error=oauth_state"
+        return redirect_response
+
+    try:
+        userinfo = exchange_microsoft_code_for_userinfo(code, settings)
+        user = get_or_create_microsoft_user(userinfo, db)
         refresh_token = create_refresh_token_session(user, db)
         db.commit()
         db.refresh(user)
